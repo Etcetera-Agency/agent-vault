@@ -1,0 +1,6 @@
+Code Simplifier review: changed method-policy evaluation to fail closed when stored methods are invalid, instead of treating normalization errors as unrestricted.
+
+Verification:
+- openspec validate enforce-service-method-matching --strict passed.
+- PATH=/Users/theDay/.cache/codex-tools/go/go1.26.4/bin:$PATH go test ./internal/broker ./internal/brokercore ./internal/mitm ./internal/server ./cmd passed.
+- git diff --check passed.

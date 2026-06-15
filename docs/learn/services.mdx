@@ -147,7 +147,7 @@ Use passthrough when the operator has decided their client already holds the cre
 
 ### Header forwarding
 
-Service list and discovery responses render unrestricted methods as `methods: ["*"]` so operators and agents can audit the policy without inferring from an omitted field.
+Service list and discovery responses render unrestricted methods as `methods: ["*"]` so operators and agents can audit the policy without inferring from an omitted field. At proxy time, the most-specific host/path/port match is evaluated first; if that service excludes the request method, Agent Vault returns `403 method_not_allowed` and does not fall through to a broader rule or unmatched-host passthrough.
 
 Agent Vault forwards your client's request headers to the upstream unchanged, except for:
 

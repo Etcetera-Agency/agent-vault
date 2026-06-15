@@ -43,6 +43,10 @@ var (
 	// configured". Callers surface 403 with error code "service_disabled".
 	ErrServiceDisabled = errors.New("brokercore: broker service is disabled")
 
+	// ErrServiceMethodDenied means a configured broker service matched the
+	// target host/path but excludes the request method. Callers surface 403.
+	ErrServiceMethodDenied = errors.New("brokercore: broker service method not allowed")
+
 	// ErrOAuthNotConnected means the credential is an OAuth type but
 	// the consent flow hasn't completed yet (no access token stored).
 	ErrOAuthNotConnected = errors.New("brokercore: oauth credential not yet connected")

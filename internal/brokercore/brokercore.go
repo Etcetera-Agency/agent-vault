@@ -201,6 +201,9 @@ func WriteInjectError(w http.ResponseWriter, err error, targetHost, vaultName, b
 	case errors.Is(err, ErrServiceDisabled):
 		writeProxyErrorWithHelp(w, http.StatusForbidden, "service_disabled",
 			fmt.Sprintf("Broker service matching host %q in vault %q is currently disabled", targetHost, vaultName), baseURL)
+	case errors.Is(err, ErrServiceMethodDenied):
+		writeProxyErrorWithHelp(w, http.StatusForbidden, "method_not_allowed",
+			fmt.Sprintf("Broker service matching host %q in vault %q does not allow this HTTP method", targetHost, vaultName), baseURL)
 	case errors.Is(err, ErrOAuthNotConnected):
 		writeProxyErrorWithHelp(w, http.StatusBadGateway, "oauth_not_connected",
 			"OAuth credential is approved but not yet connected — complete the connection in the Agent Vault dashboard", baseURL)
