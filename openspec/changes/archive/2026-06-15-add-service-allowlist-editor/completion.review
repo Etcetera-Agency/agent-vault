@@ -1,0 +1,12 @@
+Code Simplifier review:
+
+- Kept the service editor changes scoped to the existing Services tab instead of adding new editor surfaces.
+- Added key-only display for custom-header credential references as well as bearer/basic/api-key/substitution references, so the UI surfaces referenced keys without decrypted values.
+- Kept API regression tests focused on full-rule preservation and invalid-update rollback.
+
+Verification:
+
+- `openspec validate add-service-allowlist-editor --strict` passed.
+- `PATH=/Users/theDay/.cache/codex-tools/go/go1.26.4/bin:$PATH go test ./internal/server ./cmd` passed.
+- `PATH=/Users/theDay/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm run build` passed in `web`.
+- `git diff --check` passed.

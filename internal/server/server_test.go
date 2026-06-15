@@ -2421,7 +2421,7 @@ func setupVaultWithCredential(t *testing.T, servicesJSON string) (*mockStore, st
 }
 
 func TestDiscoverSuccess(t *testing.T) {
-	servicesJSON := `[{"name":"github","host":"*.github.com","auth":{"type":"bearer","token":"GITHUB_TOKEN"}},{"name":"stripe","host":"api.stripe.com","auth":{"type":"bearer","token":"STRIPE_KEY"}}]`
+	servicesJSON := `[{"name":"github","host":"*.github.com","auth":{"type":"bearer","token":"GITHUB_TOKEN"}},{"name":"stripe","host":"api.stripe.com","methods":["GET"],"auth":{"type":"bearer","token":"STRIPE_KEY"}}]`
 	ms, token, _ := setupVaultWithCredential(t, servicesJSON)
 	srv := newTestServer(withStore(ms))
 
@@ -2452,9 +2452,18 @@ func TestDiscoverSuccess(t *testing.T) {
 	if resp.Services[1].Host != "api.stripe.com" {
 		t.Fatalf("expected host 'api.stripe.com', got %q", resp.Services[1].Host)
 	}
+	if !slices.Equal(resp.Services[0].Methods, []string{"*"}) {
+		t.Fatalf("expected unrestricted methods [*], got %v", resp.Services[0].Methods)
+	}
+	if !slices.Equal(resp.Services[1].Methods, []string{"GET"}) {
+		t.Fatalf("expected methods [GET], got %v", resp.Services[1].Methods)
+	}
 	// setupVaultWithCredential seeds "STRIPE_KEY" — verify it appears in available_credentials.
 	if len(resp.AvailableCredentials) != 1 || resp.AvailableCredentials[0] != "STRIPE_KEY" {
 		t.Fatalf("expected available_credentials [STRIPE_KEY], got %v", resp.AvailableCredentials)
+	}
+	if strings.Contains(rec.Body.String(), "sk_live_xxx") {
+		t.Fatalf("discover response exposed credential value: %s", rec.Body.String())
 	}
 }
 
@@ -5875,6 +5884,114 @@ func TestServicesUpsertAddNew(t *testing.T) {
 	}
 	if resp["services_count"].(float64) != 1 {
 		t.Fatalf("expected services_count=1, got %v", resp["services_count"])
+	}
+}
+
+func TestServicesUpsertRoundTripsMethods(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	srv := newTestServer(withStore(ms))
+
+	body := `{"services":[{"name":"stripe","host":"api.stripe.com","methods":["get","HEAD"],"auth":{"type":"bearer","token":"STRIPE_KEY"}}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/vaults/default/services", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/vaults/default/services", nil)
+	getReq.Header.Set("Authorization", "Bearer "+token)
+	getRec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+
+	var resp struct {
+		Services []struct {
+			Name    string   `json:"name"`
+			Methods []string `json:"methods"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode GET response: %v", err)
+	}
+	if len(resp.Services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(resp.Services))
+	}
+	if want := []string{"GET", "HEAD"}; !slices.Equal(resp.Services[0].Methods, want) {
+		t.Fatalf("methods = %v, want %v", resp.Services[0].Methods, want)
+	}
+}
+
+func TestServicesSetPreservesGoogleMethodRule(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	ms.brokerConfigs["root-ns-id"] = &store.BrokerConfig{
+		ID: "bc-1", VaultID: "root-ns-id",
+		ServicesJSON: `[{"name":"calendar-events-read","host":"www.googleapis.com/calendar/v3/calendars/*/events*","methods":["GET"],"auth":{"type":"bearer","token":"GOOGLE_ACCESS_TOKEN"}}]`,
+	}
+	srv := newTestServer(withStore(ms))
+
+	body := `{"services":[{"name":"calendar-events-read","host":"www.googleapis.com/calendar/v3/calendars/*/events/*","methods":["GET"],"auth":{"type":"bearer","token":"GOOGLE_ACCESS_TOKEN"}}]}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/vaults/default/services", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	stored := ms.brokerConfigs["root-ns-id"].ServicesJSON
+	for _, want := range []string{`"methods":["GET"]`, `"token":"GOOGLE_ACCESS_TOKEN"`, "/events/*"} {
+		if !strings.Contains(stored, want) {
+			t.Fatalf("stored services missing %q: %s", want, stored)
+		}
+	}
+}
+
+func TestServicesSetPreservesTelegramSubstitutionRule(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	srv := newTestServer(withStore(ms))
+
+	body := `{"services":[{"name":"telegram-bot-api","host":"api.telegram.org/bot__bot_token__/*","methods":["POST"],"auth":{"type":"passthrough"},"substitutions":[{"key":"TELEGRAM_BOT_TOKEN","placeholder":"__bot_token__","in":["path"]}]}]}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/vaults/default/services", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	stored := ms.brokerConfigs["root-ns-id"].ServicesJSON
+	for _, want := range []string{`"methods":["POST"]`, `"type":"passthrough"`, `"key":"TELEGRAM_BOT_TOKEN"`, `"placeholder":"__bot_token__"`, `"in":["path"]`} {
+		if !strings.Contains(stored, want) {
+			t.Fatalf("stored services missing %q: %s", want, stored)
+		}
+	}
+}
+
+func TestServicesSetInvalidRuleLeavesExistingUnchanged(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	original := `[{"name":"calendar-events-read","host":"www.googleapis.com/calendar/v3/calendars/*/events*","methods":["GET"],"auth":{"type":"bearer","token":"GOOGLE_ACCESS_TOKEN"}}]`
+	ms.brokerConfigs["root-ns-id"] = &store.BrokerConfig{
+		ID: "bc-1", VaultID: "root-ns-id", ServicesJSON: original,
+	}
+	srv := newTestServer(withStore(ms))
+
+	body := `{"services":[{"name":"calendar-events-read","host":"www.googleapis.com/calendar/v3/calendars/*/events*","methods":["GET"],"auth":{"type":"bearer","token":"GOOGLE_ACCESS_TOKEN"}},{"name":"calendar-events-read","host":"www.googleapis.com/calendar/v3/calendars/*/events*","methods":["POST"],"auth":{"type":"bearer","token":"GOOGLE_ACCESS_TOKEN"}}]}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/vaults/default/services", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if ms.brokerConfigs["root-ns-id"].ServicesJSON != original {
+		t.Fatalf("stored services changed after invalid update:\n%s", ms.brokerConfigs["root-ns-id"].ServicesJSON)
 	}
 }
 

@@ -111,6 +111,7 @@ export interface WireService {
   enabled?: boolean;
   auth: WireServiceAuth;
   substitutions?: WireSubstitution[];
+  methods?: string[];
 }
 
 /** @internal Wire format for GET /v1/vaults/{name}/services response. */

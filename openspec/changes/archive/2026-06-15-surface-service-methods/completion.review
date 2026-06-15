@@ -1,0 +1,7 @@
+Code Simplifier review: replaced embedded service JSON response with an explicit response struct so service list output always emits joined host, hides path/port, and renders canonical methods without relying on embedded MarshalJSON behavior.
+
+Verification:
+- openspec validate surface-service-methods --strict passed.
+- PATH=/Users/theDay/.cache/codex-tools/go/go1.26.4/bin:$PATH go test ./internal/broker ./internal/proposal ./internal/server ./cmd passed.
+- npm run typecheck passed in sdks/sdk-typescript.
+- PATH=/Users/theDay/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm run build passed in web.

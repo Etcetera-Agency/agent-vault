@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/charmbracelet/huh"
 	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/session"
+	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
@@ -21,7 +21,6 @@ const (
 	mergeReplace mergeStrategy = iota
 	mergeAppend
 )
-
 
 // runInteractiveServiceSet is the entry point for the interactive service builder.
 // It is called from serviceSetCmd when no -f flag is provided.
@@ -279,14 +278,42 @@ func buildService(client *session.ClientSession, nsName string, cmd *cobra.Comma
 		return nil, err
 	}
 
+	methods, err := promptMethods()
+	if err != nil {
+		return nil, err
+	}
+
 	bareHost, path, port := broker.SplitInlineHost(host, "")
 	return &broker.Service{
-		Name: name,
-		Host: bareHost,
-		Path: path,
-		Port: port,
-		Auth: auth,
+		Name:    name,
+		Host:    bareHost,
+		Path:    path,
+		Port:    port,
+		Auth:    auth,
+		Methods: methods,
 	}, nil
+}
+
+func promptMethods() ([]string, error) {
+	var methods []string
+	err := huh.NewMultiSelect[string]().
+		Title("Allowed HTTP methods:").
+		Description("Leave empty for any method.").
+		Options(
+			huh.NewOption[string]("GET", "GET"),
+			huh.NewOption[string]("POST", "POST"),
+			huh.NewOption[string]("PUT", "PUT"),
+			huh.NewOption[string]("PATCH", "PATCH"),
+			huh.NewOption[string]("DELETE", "DELETE"),
+			huh.NewOption[string]("HEAD", "HEAD"),
+			huh.NewOption[string]("OPTIONS", "OPTIONS"),
+		).
+		Value(&methods).
+		Run()
+	if err != nil {
+		return nil, err
+	}
+	return methods, nil
 }
 
 // promptServiceName collects a slug-shaped service name and validates it

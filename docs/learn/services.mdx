@@ -9,6 +9,7 @@ Each service contains:
 
 - **Name**: A canonical per-vault identifier (slug, 3–64 lowercase alphanumeric/hyphen chars, no leading/trailing hyphen, no consecutive hyphens). **Required on write** for new services — pick a deliberate name like `stripe`, `slack-bot`, or `internal-billing`. `name` may be omitted only when `host` + `path` uniquely matches an existing service (the server adopts that service's name, the same pattern as host-based delete). Legacy services persisted without a name before this contract are auto-slugified from `host` + `path` on read so they remain addressable; the slug becomes durable on the next write.
 - **Host**: The single matcher field. Accepts a bare hostname (`api.stripe.com`), a one-level wildcard (`*.github.com`), an inline path-scoped form (`slack.com/api/*`), or a port-scoped form (`internal.corp.com:3000` or `internal.corp.com:3000/api/*`). When a port is included, the service matches only traffic to that port; without a port, the service matches any port. Reads and writes use the same shape: writes accept any of those forms; reads return the joined inline form so you see exactly what you wrote.
+- **Methods**: Optional HTTP method allowlist. Omit `methods` or use `methods: ["*"]` for any method. Lowercase input is normalized to uppercase; empty, duplicate, invalid, or mixed wildcard entries are rejected.
 - **Auth config**: How Agent Vault authenticates. Five types are supported: `bearer`, `basic`, `api-key`, `custom`, and `passthrough` (opt out of injection).
 
 <Tip>
@@ -32,6 +33,7 @@ Services are defined in a YAML file. Here's what a single service looks like:
 services:
   - name: stripe
     host: api.stripe.com
+    methods: ["*"]
     auth:
       type: bearer
       token: STRIPE_KEY
@@ -144,6 +146,8 @@ services:
 Use passthrough when the operator has decided their client already holds the credential (for example, an existing tool that manages its own token) and wants Agent Vault to provide the host allowlist, [netguard](/learn/security), TLS interception, and audit logging without putting the secret in the vault. All the other auth types are the default — reach for passthrough only when you explicitly want Agent Vault *not* to broker the credential.
 
 ### Header forwarding
+
+Service list and discovery responses render unrestricted methods as `methods: ["*"]` so operators and agents can audit the policy without inferring from an omitted field. At proxy time, the most-specific host/path/port match is evaluated first; if that service excludes the request method, Agent Vault returns `403 method_not_allowed` and does not fall through to a broader rule or unmatched-host passthrough.
 
 Agent Vault forwards your client's request headers to the upstream unchanged, except for:
 
@@ -327,6 +331,7 @@ services:
   # Slack uses two credentials at the same host — distinguish via inline-path host.
   - name: slack-bot
     host: slack.com/api/*
+    methods: ["POST"]
     auth:
       type: bearer
       token: SLACK_BOT_TOKEN
@@ -361,6 +366,10 @@ agent-vault vault service set --vault my-vault
 ```
 
 Walks you through adding services, auth configs, and credential references one at a time. Requires a TTY (won't work in scripts).
+
+### Edit in the web UI
+
+Vault admins can add, edit, disable, and delete services from the vault's Services tab. The editor saves the full allowlist rule: service name, host/path pattern, methods, enabled state, auth type, credential key references, and substitutions. Credential selectors and inputs show credential key names only; decrypted credential values are never displayed.
 
 ### View current services
 

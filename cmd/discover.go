@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/spf13/cobra"
@@ -53,8 +54,9 @@ variables). In agent mode (AGENT_VAULT_TOKEN set), AGENT_VAULT_VAULT (or
 		var resp struct {
 			Vault    string `json:"vault"`
 			Services []struct {
-				Name string `json:"name"`
-				Host string `json:"host"`
+				Name    string   `json:"name"`
+				Host    string   `json:"host"`
+				Methods []string `json:"methods"`
 			} `json:"services"`
 			AvailableCredentials []string `json:"available_credentials"`
 		}
@@ -69,9 +71,9 @@ variables). In agent mode (AGENT_VAULT_TOKEN set), AGENT_VAULT_VAULT (or
 			fmt.Fprintln(w)
 			fmt.Fprintf(w, "%s\n", boldText("Services"))
 			t := newTable(w)
-			t.AppendHeader(table.Row{"NAME", "HOST"})
+			t.AppendHeader(table.Row{"NAME", "HOST", "METHODS"})
 			for _, svc := range resp.Services {
-				t.AppendRow(table.Row{svc.Name, svc.Host})
+				t.AppendRow(table.Row{svc.Name, svc.Host, strings.Join(svc.Methods, ", ")})
 			}
 			t.Render()
 		} else {

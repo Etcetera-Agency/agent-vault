@@ -59,11 +59,11 @@ type InjectResult struct {
 	Passthrough bool
 }
 
-// CredentialProvider resolves a service for (targetHost, targetPath) in
-// vaultID and returns the headers to attach. targetPath must be the URL
-// path only — no query, no fragment.
+// CredentialProvider resolves a service for (targetHost, targetMethod,
+// targetPath) in vaultID and returns the headers to attach. targetPath must
+// be the URL path only — no query, no fragment.
 type CredentialProvider interface {
-	Inject(ctx context.Context, vaultID, targetHost string, targetPort int, targetPath string) (*InjectResult, error)
+	Inject(ctx context.Context, vaultID, targetHost string, targetPort int, targetMethod, targetPath string) (*InjectResult, error)
 }
 
 // CredentialStore is the minimal store surface used by StoreCredentialProvider.
@@ -109,7 +109,7 @@ func NewStoreCredentialProvider(s CredentialStore, encKey []byte) *StoreCredenti
 // service's auth into HTTP headers. targetHost may include a port —
 // stripped before matching. Pass "/" for targetPath when no path is
 // meaningful.
-func (p *StoreCredentialProvider) Inject(ctx context.Context, vaultID, targetHost string, targetPort int, targetPath string) (*InjectResult, error) {
+func (p *StoreCredentialProvider) Inject(ctx context.Context, vaultID, targetHost string, targetPort int, targetMethod, targetPath string) (*InjectResult, error) {
 	// A missing row is equivalent to an empty services list — fall
 	// through to the unmatched-host policy. Any other error fails closed
 	// so a transient store failure can't silently strip enforcement.
@@ -142,7 +142,11 @@ func (p *StoreCredentialProvider) Inject(ctx context.Context, vaultID, targetHos
 	if targetPath == "" {
 		targetPath = "/"
 	}
-	matched, score := broker.MatchService(matchHost, targetPort, targetPath, services)
+	// fork-local: Gate the upstream host/path match with stored method policy before credential injection.
+	matched, score, matchStatus := broker.MatchServiceWithMethodPolicy(matchHost, targetPort, targetPath, targetMethod, services)
+	if matchStatus == broker.MethodMatchDenied {
+		return nil, ErrServiceMethodDenied
+	}
 	if matched == nil {
 		// Fail closed on policy lookup errors so a transient store
 		// failure can't silently strip enforcement.

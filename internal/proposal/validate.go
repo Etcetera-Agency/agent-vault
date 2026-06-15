@@ -19,7 +19,6 @@ const (
 	MaxObtainInstructionsLen = 1000
 )
 
-
 // ValidateMessages checks length limits for proposal-level message fields.
 func ValidateMessages(message, userMessage string) error {
 	if len(message) > MaxMessageLen {
@@ -71,6 +70,9 @@ func Validate(services []Service, credentials []CredentialSlot) error {
 			return fmt.Errorf("service %d: %w", i, err)
 		}
 		if err := broker.ValidatePort(s.Port); err != nil {
+			return fmt.Errorf("service %d: %w", i, err)
+		}
+		if _, err := broker.NormalizeMethodList(s.Methods); err != nil {
 			return fmt.Errorf("service %d: %w", i, err)
 		}
 		if s.Action == ActionSet {

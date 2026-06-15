@@ -28,6 +28,7 @@ interface Service {
   name: string;
   host: string;
   enabled?: boolean;
+  methods?: string[];
   auth: Auth;
   substitutions?: Substitution[];
 }
@@ -49,6 +50,31 @@ function isEnabled(service: Service): boolean {
   return service.enabled !== false;
 }
 
+function displayMethods(methods?: string[]): string[] {
+  if (!methods || methods.length === 0) return ["*"];
+  return methods;
+}
+
+const CREDENTIAL_REF_RE = /\{\{\s*(\w+)\s*\}\}/g;
+
+function credentialKeysForService(service: Service): string[] {
+  const keys = new Set<string>();
+  const auth = service.auth;
+  if (auth?.token) keys.add(auth.token);
+  if (auth?.username) keys.add(auth.username);
+  if (auth?.password) keys.add(auth.password);
+  if (auth?.key) keys.add(auth.key);
+  for (const value of Object.values(auth?.headers ?? {})) {
+    for (const match of value.matchAll(CREDENTIAL_REF_RE)) {
+      keys.add(match[1]);
+    }
+  }
+  for (const sub of service.substitutions ?? []) {
+    if (sub.key) keys.add(sub.key);
+  }
+  return [...keys];
+}
+
 type AuthType = "bearer" | "basic" | "api-key" | "custom" | "passthrough";
 
 const AUTH_TYPE_OPTIONS: { value: AuthType; label: string }[] = [
@@ -58,6 +84,8 @@ const AUTH_TYPE_OPTIONS: { value: AuthType; label: string }[] = [
   { value: "api-key", label: "API key" },
   { value: "custom", label: "Custom" },
 ];
+
+const METHOD_OPTIONS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
 function slugifyHost(host: string): string {
   let slug = host
@@ -77,6 +105,7 @@ export default function ServicesTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [catalog, setCatalog] = useState<CatalogTemplate[]>([]);
+  const [credentialKeys, setCredentialKeys] = useState<string[]>([]);
   const presetApplied = useRef(false);
 
   // Add/Edit modal state: null = closed, -1 = add, 0+ = edit index
@@ -99,6 +128,7 @@ export default function ServicesTab() {
   useEffect(() => {
     fetchServices();
     fetchCatalog();
+    fetchCredentialKeys();
     fetchDiscoveredHosts();
   }, []);
 
@@ -139,6 +169,17 @@ export default function ServicesTab() {
       setError("Network error.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function fetchCredentialKeys() {
+    try {
+      const data = await apiRequest<{ keys: string[] }>(
+        `/v1/credentials?vault=${encodeURIComponent(vaultName)}`
+      );
+      setCredentialKeys(data.keys ?? []);
+    } catch {
+      setCredentialKeys([]);
     }
   }
 
@@ -233,6 +274,7 @@ export default function ServicesTab() {
       render: (service) => {
         const label = AUTH_TYPE_LABELS[service.auth?.type] || service.auth?.type || "\u2014";
         const subCount = service.substitutions?.length ?? 0;
+        const keys = credentialKeysForService(service);
         return (
           <div className="text-sm text-text">
             {label}
@@ -241,9 +283,35 @@ export default function ServicesTab() {
                 + {subCount} substitution{subCount === 1 ? "" : "s"}
               </span>
             )}
+            {keys.length > 0 && (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {keys.map((key) => (
+                  <span key={key} className="font-mono text-[11px] text-text-muted">
+                    {key}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         );
       },
+    },
+    {
+      key: "methods",
+      header: "Methods",
+      render: (service) => (
+        <div className="flex flex-wrap gap-1.5">
+          {displayMethods(service.methods).map((method) => (
+            <span
+              key={method}
+              title={method === "*" ? "Any method" : undefined}
+              className="rounded-md border border-border bg-bg px-2 py-0.5 font-mono text-xs text-text-muted"
+            >
+              {method}
+            </span>
+          ))}
+        </div>
+      ),
     },
     {
       key: "enabled",
@@ -420,6 +488,7 @@ export default function ServicesTab() {
           defaultAuthHeader={editingIndex === -1 ? addWithHost?.authHeader : undefined}
           defaultPreset={editingIndex === -1 && !addWithHost ? presetParam : undefined}
           catalog={catalog}
+          credentialKeys={credentialKeys}
           onClose={() => {
             setEditingIndex(null);
             setAddWithHost(null);
@@ -452,6 +521,7 @@ function ServiceModal({
   defaultAuthHeader,
   defaultPreset,
   catalog,
+  credentialKeys,
   onClose,
   onSave,
 }: {
@@ -463,12 +533,16 @@ function ServiceModal({
   defaultAuthHeader?: string;
   defaultPreset?: string;
   catalog: CatalogTemplate[];
+  credentialKeys: string[];
   onClose: () => void;
   onSave: (service: Service) => Promise<void>;
 }) {
   const [name, setName] = useState(initial?.name ?? defaultName ?? "");
   const [pattern, setPattern] = useState(initial?.host ?? defaultHost ?? "");
   const [enabled, setEnabled] = useState(initial ? initial.enabled !== false : true);
+  const [methods, setMethods] = useState<string[]>(() =>
+    (initial?.methods ?? []).filter((method) => method !== "*")
+  );
   const [authType, setAuthType] = useState<AuthType>((initial?.auth?.type as AuthType) ?? (defaultAuthScheme as AuthType) ?? "passthrough");
 
   // Bearer fields
@@ -523,6 +597,7 @@ function ServiceModal({
   function resetFields() {
     setName("");
     setPattern("");
+    setMethods([]);
     setAuthType("passthrough");
     setToken("");
     setUsername("");
@@ -632,6 +707,7 @@ function ServiceModal({
         name: name.trim(),
         host: pattern.trim(),
         ...(enabled ? {} : { enabled: false }),
+        methods: methods.length > 0 ? methods : ["*"],
         auth: buildAuth(),
         ...(cleanedSubs.length > 0 && { substitutions: cleanedSubs }),
       };
@@ -674,6 +750,11 @@ function ServiceModal({
       }
     >
       <div className="space-y-6">
+        <datalist id="service-credential-keys">
+          {credentialKeys.map((key) => (
+            <option key={key} value={key} />
+          ))}
+        </datalist>
         <Section title="Basics">
           <FormField
             label="Name"
@@ -707,6 +788,44 @@ function ServiceModal({
             </div>
             <Toggle checked={enabled} onChange={setEnabled} ariaLabel="Enabled" />
           </div>
+          <FormField
+            label="Methods"
+            tooltip="Pick allowed HTTP methods. Leave all unchecked for any method."
+          >
+            <div className="flex flex-wrap gap-2">
+              {METHOD_OPTIONS.map((method) => {
+                const checked = methods.includes(method);
+                return (
+                  <button
+                    key={method}
+                    type="button"
+                    role="checkbox"
+                    aria-checked={checked}
+                    onClick={() => {
+                      setMethods((prev) =>
+                        checked ? prev.filter((m) => m !== method) : [...prev, method]
+                      );
+                    }}
+                    className={`rounded-md border px-2.5 py-1 font-mono text-xs transition-colors ${
+                      checked
+                        ? "border-primary bg-[var(--color-primary-ring)] text-primary"
+                        : "border-border bg-bg text-text-muted hover:text-text"
+                    }`}
+                  >
+                    {method}
+                  </button>
+                );
+              })}
+              {methods.length === 0 && (
+                <span
+                  className="rounded-md border border-border bg-bg px-2.5 py-1 font-mono text-xs text-text-muted"
+                  title="Any method"
+                >
+                  *
+                </span>
+              )}
+            </div>
+          </FormField>
         </Section>
 
         <Section title="Authentication">
@@ -725,6 +844,7 @@ function ServiceModal({
             >
               <Input
                 placeholder="e.g. STRIPE_KEY"
+                list="service-credential-keys"
                 value={token}
                 onChange={(e) => setToken(e.target.value)}
                 onKeyDown={(e) => {
@@ -743,6 +863,7 @@ function ServiceModal({
               >
                 <Input
                   placeholder="e.g. ASHBY_API_KEY"
+                  list="service-credential-keys"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                 />
@@ -753,6 +874,7 @@ function ServiceModal({
               >
                 <Input
                   placeholder="e.g. ASHBY_PASSWORD"
+                  list="service-credential-keys"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   onKeyDown={(e) => {
@@ -772,6 +894,7 @@ function ServiceModal({
               >
                 <Input
                   placeholder="e.g. OPENAI_API_KEY"
+                  list="service-credential-keys"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                 />
@@ -938,6 +1061,7 @@ function ServiceModal({
                   <InlineInput
                     widthClass="w-48"
                     placeholder="CREDENTIAL_KEY"
+                    list="service-credential-keys"
                     value={sub.key}
                     onChange={(value) =>
                       setSubs((prev) =>
@@ -1039,11 +1163,13 @@ function CollapsibleSection({
 function InlineInput({
   widthClass,
   placeholder,
+  list,
   value,
   onChange,
 }: {
   widthClass: string;
   placeholder: string;
+  list?: string;
   value: string;
   onChange: (next: string) => void;
 }) {
@@ -1051,6 +1177,7 @@ function InlineInput({
     <input
       className={`${widthClass} px-3 py-1.5 bg-surface-raised border border-border rounded-md font-mono text-sm text-text outline-none transition-colors focus:border-border-focus focus:shadow-[0_0_0_3px_var(--color-primary-ring)]`}
       placeholder={placeholder}
+      list={list}
       value={value}
       onChange={(e) => onChange(e.target.value)}
     />

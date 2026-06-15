@@ -1,0 +1,11 @@
+Code Simplifier review:
+
+- Kept the profile implementation data-driven: new example YAML, proposal example, docs, and fork-local acceptance tests.
+- Avoided core storage or matcher changes; profile behavior uses existing service matching, method policy, credential injection, substitution, and logging paths.
+- Removed an unused helper return from the profile test setup.
+
+Verification:
+
+- `openspec validate add-agent-service-profile --strict` passed.
+- `PATH=/Users/theDay/.cache/codex-tools/go/go1.26.4/bin:$PATH go test ./internal/brokercore ./internal/broker ./cmd` passed.
+- `git diff --check` passed.

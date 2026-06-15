@@ -101,6 +101,8 @@ export interface ServiceInput {
   host: string;
   /** Whether the service is active. Omitted/undefined is treated as enabled. */
   enabled?: boolean;
+  /** Allowed HTTP methods. Omit or pass ["*"] for any method. */
+  methods?: string[];
   /** Authentication configuration. */
   auth: ServiceAuth;
   /** Optional placeholder→credential substitutions applied before forwarding. */
@@ -123,6 +125,8 @@ export interface Service {
   host: string;
   /** Whether the service is active. Omitted/undefined is treated as enabled. */
   enabled?: boolean;
+  /** Allowed HTTP methods. The server returns ["*"] for any method. */
+  methods?: string[];
   /** Authentication configuration. */
   auth: ServiceAuth;
   /** Optional placeholder→credential substitutions applied before forwarding. */

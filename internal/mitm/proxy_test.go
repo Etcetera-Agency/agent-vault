@@ -61,6 +61,7 @@ type fakeCredProvider struct {
 	// byHostPort maps "host:port" to the injection outcome. Checked
 	// before byHost so port-specific entries take precedence.
 	byHostPort map[string]fakeInjectResult
+	lastMethod string
 }
 
 type fakeInjectResult struct {
@@ -68,7 +69,8 @@ type fakeInjectResult struct {
 	err    error
 }
 
-func (f *fakeCredProvider) Inject(_ context.Context, _, targetHost string, targetPort int, _ string) (*brokercore.InjectResult, error) {
+func (f *fakeCredProvider) Inject(_ context.Context, _, targetHost string, targetPort int, targetMethod string, _ string) (*brokercore.InjectResult, error) {
+	f.lastMethod = targetMethod
 	host := targetHost
 	if h, _, err := net.SplitHostPort(targetHost); err == nil {
 		host = h
@@ -84,6 +86,19 @@ func (f *fakeCredProvider) Inject(_ context.Context, _, targetHost string, targe
 		return nil, brokercore.ErrServiceNotFound
 	}
 	return res.result, res.err
+}
+
+func hostFromURL(t *testing.T, rawURL string) string {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse upstream URL: %v", err)
+	}
+	host := u.Hostname()
+	if host == "" {
+		t.Fatalf("upstream URL has no host: %s", rawURL)
+	}
+	return host
 }
 
 // setupProxy starts a mitm.Proxy backed by a freshly-generated SoftCA and
@@ -1275,6 +1290,43 @@ func TestMITMUnknownHostInTunnel(t *testing.T) {
 	}
 	if hint["endpoint"] != "POST /v1/proposals" {
 		t.Fatalf("hint.endpoint = %v", hint["endpoint"])
+	}
+}
+
+func TestMITMMethodDeniedInTunnel(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "should-not-reach")
+	}))
+	defer upstream.Close()
+
+	sr := validTokenResolver("av_sess_ok",
+		&brokercore.ProxyScope{VaultID: "v1", VaultName: "default", VaultRole: "proxy"})
+	cp := &fakeCredProvider{byHost: map[string]fakeInjectResult{
+		hostFromURL(t, upstream.URL): {err: brokercore.ErrServiceMethodDenied},
+	}}
+
+	proxyURL, clientRoots, _ := setupProxy(t, sr, cp)
+	client := newTrustingClient(proxyURL, url.User("av_sess_ok"), clientRoots)
+
+	resp, err := client.Post(upstream.URL+"/ping", "text/plain", strings.NewReader("x"))
+	if err != nil {
+		t.Fatalf("client.Post: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", resp.StatusCode)
+	}
+	if cp.lastMethod != http.MethodPost {
+		t.Fatalf("lastMethod = %q, want POST", cp.lastMethod)
+	}
+
+	var body map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["error"] != "method_not_allowed" {
+		t.Fatalf("body.error = %v, want method_not_allowed", body["error"])
 	}
 }
 
