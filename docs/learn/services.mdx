@@ -147,6 +147,8 @@ Use passthrough when the operator has decided their client already holds the cre
 
 ### Header forwarding
 
+Service list and discovery responses render unrestricted methods as `methods: ["*"]` so operators and agents can audit the policy without inferring from an omitted field.
+
 Agent Vault forwards your client's request headers to the upstream unchanged, except for:
 
 - **Hop-by-hop headers** per RFC 7230 (`Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `Proxy-Connection`, `Te`, `Trailer`, `Transfer-Encoding`, `Upgrade`).

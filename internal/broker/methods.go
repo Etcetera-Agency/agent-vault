@@ -48,6 +48,15 @@ func NormalizeMethodList(methods []string) ([]string, error) {
 	return normalized, nil
 }
 
+// DisplayMethods renders empty storage as the canonical any-method token.
+func DisplayMethods(methods []string) []string {
+	normalized, err := NormalizeMethodList(methods)
+	if err != nil || len(normalized) == 0 {
+		return []string{"*"}
+	}
+	return normalized
+}
+
 func isHTTPToken(method string) bool {
 	for i := 0; i < len(method); i++ {
 		if !isTChar(method[i]) {

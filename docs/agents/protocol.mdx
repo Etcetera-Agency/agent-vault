@@ -62,16 +62,16 @@ The `X-Vault` header is required for instance-level agent tokens. Vault-scoped s
 {
   "vault": "my-vault",
   "services": [
-    { "name": "stripe", "host": "api.stripe.com" },
-    { "name": "github", "host": "*.github.com" },
-    { "name": "slack-bot", "host": "slack.com/api/*" },
-    { "name": "slack-conn", "host": "slack.com/api/apps.connections.*" }
+    { "name": "stripe", "host": "api.stripe.com", "methods": ["*"] },
+    { "name": "github", "host": "*.github.com", "methods": ["*"] },
+    { "name": "slack-bot", "host": "slack.com/api/*", "methods": ["POST"] },
+    { "name": "slack-conn", "host": "slack.com/api/apps.connections.*", "methods": ["GET"] }
   ],
   "available_credentials": ["GITHUB_TOKEN", "SLACK_BOT_TOKEN", "SLACK_CONNECTION_TOKEN", "STRIPE_KEY"]
 }
 ```
 
-- **`services`** lists the services the agent can reach through Agent Vault (each entry has `name` and `host`; `host` carries the joined inline form, so a path-scoped service shows up as e.g. `slack.com/api/*`). Requests to any other host go direct. When two services share the same bare host but scope to different paths (e.g. Slack here), distinguish them by `name` in subsequent operations.
+- **`services`** lists the services the agent can reach through Agent Vault (each entry has `name`, `host`, and `methods`; `host` carries the joined inline form, so a path-scoped service shows up as e.g. `slack.com/api/*`). `methods: ["*"]` means any method. Requests to any other host go direct. When two services share the same bare host but scope to different paths (e.g. Slack here), distinguish them by `name` in subsequent operations.
 - **`available_credentials`** lists [credential](/learn/credentials) key names in the vault (values are never exposed). Agents use these to avoid creating duplicate slots in [proposals](/learn/proposals).
 
 ## Route requests through HTTPS_PROXY / HTTP_PROXY

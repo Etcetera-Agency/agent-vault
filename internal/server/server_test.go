@@ -2421,7 +2421,7 @@ func setupVaultWithCredential(t *testing.T, servicesJSON string) (*mockStore, st
 }
 
 func TestDiscoverSuccess(t *testing.T) {
-	servicesJSON := `[{"name":"github","host":"*.github.com","auth":{"type":"bearer","token":"GITHUB_TOKEN"}},{"name":"stripe","host":"api.stripe.com","auth":{"type":"bearer","token":"STRIPE_KEY"}}]`
+	servicesJSON := `[{"name":"github","host":"*.github.com","auth":{"type":"bearer","token":"GITHUB_TOKEN"}},{"name":"stripe","host":"api.stripe.com","methods":["GET"],"auth":{"type":"bearer","token":"STRIPE_KEY"}}]`
 	ms, token, _ := setupVaultWithCredential(t, servicesJSON)
 	srv := newTestServer(withStore(ms))
 
@@ -2452,9 +2452,18 @@ func TestDiscoverSuccess(t *testing.T) {
 	if resp.Services[1].Host != "api.stripe.com" {
 		t.Fatalf("expected host 'api.stripe.com', got %q", resp.Services[1].Host)
 	}
+	if !slices.Equal(resp.Services[0].Methods, []string{"*"}) {
+		t.Fatalf("expected unrestricted methods [*], got %v", resp.Services[0].Methods)
+	}
+	if !slices.Equal(resp.Services[1].Methods, []string{"GET"}) {
+		t.Fatalf("expected methods [GET], got %v", resp.Services[1].Methods)
+	}
 	// setupVaultWithCredential seeds "STRIPE_KEY" — verify it appears in available_credentials.
 	if len(resp.AvailableCredentials) != 1 || resp.AvailableCredentials[0] != "STRIPE_KEY" {
 		t.Fatalf("expected available_credentials [STRIPE_KEY], got %v", resp.AvailableCredentials)
+	}
+	if strings.Contains(rec.Body.String(), "sk_live_xxx") {
+		t.Fatalf("discover response exposed credential value: %s", rec.Body.String())
 	}
 }
 

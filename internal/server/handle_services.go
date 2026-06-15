@@ -252,6 +252,30 @@ type candidateRef struct {
 	Host string `json:"host"`
 }
 
+type serviceResponse struct {
+	Name          string                `json:"name"`
+	Host          string                `json:"host"`
+	Enabled       *bool                 `json:"enabled,omitempty"`
+	Auth          broker.Auth           `json:"auth"`
+	Substitutions []broker.Substitution `json:"substitutions,omitempty"`
+	Methods       []string              `json:"methods"`
+}
+
+func serviceResponses(services []broker.Service) []serviceResponse {
+	out := make([]serviceResponse, len(services))
+	for i, svc := range services {
+		out[i] = serviceResponse{
+			Name:          svc.Name,
+			Host:          svc.MatcherPattern(),
+			Enabled:       svc.Enabled,
+			Auth:          svc.Auth,
+			Substitutions: svc.Substitutions,
+			Methods:       broker.DisplayMethods(svc.Methods),
+		}
+	}
+	return out
+}
+
 func toCandidateRefs(svcs []broker.Service) []candidateRef {
 	out := make([]candidateRef, len(svcs))
 	for i, s := range svcs {
@@ -283,7 +307,7 @@ func (s *Server) handleServicesGet(w http.ResponseWriter, r *http.Request) {
 		services = []broker.Service{}
 	}
 
-	jsonOK(w, map[string]interface{}{"vault": name, "services": services})
+	jsonOK(w, map[string]interface{}{"vault": name, "services": serviceResponses(services)})
 }
 
 // handleServicesCredentialUsage returns {name, host} for every service

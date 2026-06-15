@@ -28,6 +28,7 @@ interface Service {
   name: string;
   host: string;
   enabled?: boolean;
+  methods?: string[];
   auth: Auth;
   substitutions?: Substitution[];
 }
@@ -49,6 +50,11 @@ function isEnabled(service: Service): boolean {
   return service.enabled !== false;
 }
 
+function displayMethods(methods?: string[]): string[] {
+  if (!methods || methods.length === 0) return ["*"];
+  return methods;
+}
+
 type AuthType = "bearer" | "basic" | "api-key" | "custom" | "passthrough";
 
 const AUTH_TYPE_OPTIONS: { value: AuthType; label: string }[] = [
@@ -58,6 +64,8 @@ const AUTH_TYPE_OPTIONS: { value: AuthType; label: string }[] = [
   { value: "api-key", label: "API key" },
   { value: "custom", label: "Custom" },
 ];
+
+const METHOD_OPTIONS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
 function slugifyHost(host: string): string {
   let slug = host
@@ -244,6 +252,23 @@ export default function ServicesTab() {
           </div>
         );
       },
+    },
+    {
+      key: "methods",
+      header: "Methods",
+      render: (service) => (
+        <div className="flex flex-wrap gap-1.5">
+          {displayMethods(service.methods).map((method) => (
+            <span
+              key={method}
+              title={method === "*" ? "Any method" : undefined}
+              className="rounded-md border border-border bg-bg px-2 py-0.5 font-mono text-xs text-text-muted"
+            >
+              {method}
+            </span>
+          ))}
+        </div>
+      ),
     },
     {
       key: "enabled",
@@ -469,6 +494,9 @@ function ServiceModal({
   const [name, setName] = useState(initial?.name ?? defaultName ?? "");
   const [pattern, setPattern] = useState(initial?.host ?? defaultHost ?? "");
   const [enabled, setEnabled] = useState(initial ? initial.enabled !== false : true);
+  const [methods, setMethods] = useState<string[]>(() =>
+    (initial?.methods ?? []).filter((method) => method !== "*")
+  );
   const [authType, setAuthType] = useState<AuthType>((initial?.auth?.type as AuthType) ?? (defaultAuthScheme as AuthType) ?? "passthrough");
 
   // Bearer fields
@@ -523,6 +551,7 @@ function ServiceModal({
   function resetFields() {
     setName("");
     setPattern("");
+    setMethods([]);
     setAuthType("passthrough");
     setToken("");
     setUsername("");
@@ -632,6 +661,7 @@ function ServiceModal({
         name: name.trim(),
         host: pattern.trim(),
         ...(enabled ? {} : { enabled: false }),
+        methods: methods.length > 0 ? methods : ["*"],
         auth: buildAuth(),
         ...(cleanedSubs.length > 0 && { substitutions: cleanedSubs }),
       };
@@ -707,6 +737,44 @@ function ServiceModal({
             </div>
             <Toggle checked={enabled} onChange={setEnabled} ariaLabel="Enabled" />
           </div>
+          <FormField
+            label="Methods"
+            tooltip="Pick allowed HTTP methods. Leave all unchecked for any method."
+          >
+            <div className="flex flex-wrap gap-2">
+              {METHOD_OPTIONS.map((method) => {
+                const checked = methods.includes(method);
+                return (
+                  <button
+                    key={method}
+                    type="button"
+                    role="checkbox"
+                    aria-checked={checked}
+                    onClick={() => {
+                      setMethods((prev) =>
+                        checked ? prev.filter((m) => m !== method) : [...prev, method]
+                      );
+                    }}
+                    className={`rounded-md border px-2.5 py-1 font-mono text-xs transition-colors ${
+                      checked
+                        ? "border-primary bg-[var(--color-primary-ring)] text-primary"
+                        : "border-border bg-bg text-text-muted hover:text-text"
+                    }`}
+                  >
+                    {method}
+                  </button>
+                );
+              })}
+              {methods.length === 0 && (
+                <span
+                  className="rounded-md border border-border bg-bg px-2.5 py-1 font-mono text-xs text-text-muted"
+                  title="Any method"
+                >
+                  *
+                </span>
+              )}
+            </div>
+          </FormField>
         </Section>
 
         <Section title="Authentication">

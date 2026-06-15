@@ -241,6 +241,14 @@ func TestServiceSubcommandsRegistered(t *testing.T) {
 			t.Errorf("expected service subcommand %q to be registered, but it was not", name)
 		}
 	}
+
+	addCmd := findSubcommand(svcCmd, "add")
+	if addCmd == nil {
+		t.Fatal("service add command not found")
+	}
+	if addCmd.Flags().Lookup("method") == nil {
+		t.Error("expected --method flag on service add command")
+	}
 }
 
 func TestVaultNoBrokerSubcommand(t *testing.T) {
