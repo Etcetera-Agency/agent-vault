@@ -5927,6 +5927,74 @@ func TestServicesUpsertRoundTripsMethods(t *testing.T) {
 	}
 }
 
+func TestServicesSetPreservesGoogleMethodRule(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	ms.brokerConfigs["root-ns-id"] = &store.BrokerConfig{
+		ID: "bc-1", VaultID: "root-ns-id",
+		ServicesJSON: `[{"name":"calendar-events-read","host":"www.googleapis.com/calendar/v3/calendars/*/events*","methods":["GET"],"auth":{"type":"bearer","token":"GOOGLE_ACCESS_TOKEN"}}]`,
+	}
+	srv := newTestServer(withStore(ms))
+
+	body := `{"services":[{"name":"calendar-events-read","host":"www.googleapis.com/calendar/v3/calendars/*/events/*","methods":["GET"],"auth":{"type":"bearer","token":"GOOGLE_ACCESS_TOKEN"}}]}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/vaults/default/services", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	stored := ms.brokerConfigs["root-ns-id"].ServicesJSON
+	for _, want := range []string{`"methods":["GET"]`, `"token":"GOOGLE_ACCESS_TOKEN"`, "/events/*"} {
+		if !strings.Contains(stored, want) {
+			t.Fatalf("stored services missing %q: %s", want, stored)
+		}
+	}
+}
+
+func TestServicesSetPreservesTelegramSubstitutionRule(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	srv := newTestServer(withStore(ms))
+
+	body := `{"services":[{"name":"telegram-bot-api","host":"api.telegram.org/bot__bot_token__/*","methods":["POST"],"auth":{"type":"passthrough"},"substitutions":[{"key":"TELEGRAM_BOT_TOKEN","placeholder":"__bot_token__","in":["path"]}]}]}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/vaults/default/services", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	stored := ms.brokerConfigs["root-ns-id"].ServicesJSON
+	for _, want := range []string{`"methods":["POST"]`, `"type":"passthrough"`, `"key":"TELEGRAM_BOT_TOKEN"`, `"placeholder":"__bot_token__"`, `"in":["path"]`} {
+		if !strings.Contains(stored, want) {
+			t.Fatalf("stored services missing %q: %s", want, stored)
+		}
+	}
+}
+
+func TestServicesSetInvalidRuleLeavesExistingUnchanged(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	original := `[{"name":"calendar-events-read","host":"www.googleapis.com/calendar/v3/calendars/*/events*","methods":["GET"],"auth":{"type":"bearer","token":"GOOGLE_ACCESS_TOKEN"}}]`
+	ms.brokerConfigs["root-ns-id"] = &store.BrokerConfig{
+		ID: "bc-1", VaultID: "root-ns-id", ServicesJSON: original,
+	}
+	srv := newTestServer(withStore(ms))
+
+	body := `{"services":[{"name":"calendar-events-read","host":"www.googleapis.com/calendar/v3/calendars/*/events*","methods":["GET"],"auth":{"type":"bearer","token":"GOOGLE_ACCESS_TOKEN"}},{"name":"calendar-events-read","host":"www.googleapis.com/calendar/v3/calendars/*/events*","methods":["POST"],"auth":{"type":"bearer","token":"GOOGLE_ACCESS_TOKEN"}}]}`
+	req := httptest.NewRequest(http.MethodPut, "/v1/vaults/default/services", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if ms.brokerConfigs["root-ns-id"].ServicesJSON != original {
+		t.Fatalf("stored services changed after invalid update:\n%s", ms.brokerConfigs["root-ns-id"].ServicesJSON)
+	}
+}
+
 // TestServicesUpsertRejectsMissingNameForNewService pins the
 // "name is required for new services" contract: an empty-Name upsert
 // against an empty vault has no existing entry to adopt by host, so
