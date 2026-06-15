@@ -9,6 +9,7 @@ Each service contains:
 
 - **Name**: A canonical per-vault identifier (slug, 3–64 lowercase alphanumeric/hyphen chars, no leading/trailing hyphen, no consecutive hyphens). **Required on write** for new services — pick a deliberate name like `stripe`, `slack-bot`, or `internal-billing`. `name` may be omitted only when `host` + `path` uniquely matches an existing service (the server adopts that service's name, the same pattern as host-based delete). Legacy services persisted without a name before this contract are auto-slugified from `host` + `path` on read so they remain addressable; the slug becomes durable on the next write.
 - **Host**: The single matcher field. Accepts a bare hostname (`api.stripe.com`), a one-level wildcard (`*.github.com`), an inline path-scoped form (`slack.com/api/*`), or a port-scoped form (`internal.corp.com:3000` or `internal.corp.com:3000/api/*`). When a port is included, the service matches only traffic to that port; without a port, the service matches any port. Reads and writes use the same shape: writes accept any of those forms; reads return the joined inline form so you see exactly what you wrote.
+- **Methods**: Optional HTTP method allowlist. Omit `methods` or use `methods: ["*"]` for any method. Lowercase input is normalized to uppercase; empty, duplicate, invalid, or mixed wildcard entries are rejected. This field is stored and returned by service APIs, but method enforcement lands in the next slice.
 - **Auth config**: How Agent Vault authenticates. Five types are supported: `bearer`, `basic`, `api-key`, `custom`, and `passthrough` (opt out of injection).
 
 <Tip>
@@ -32,6 +33,7 @@ Services are defined in a YAML file. Here's what a single service looks like:
 services:
   - name: stripe
     host: api.stripe.com
+    methods: ["*"]
     auth:
       type: bearer
       token: STRIPE_KEY
@@ -327,6 +329,7 @@ services:
   # Slack uses two credentials at the same host — distinguish via inline-path host.
   - name: slack-bot
     host: slack.com/api/*
+    methods: ["POST"]
     auth:
       type: bearer
       token: SLACK_BOT_TOKEN

@@ -5878,6 +5878,46 @@ func TestServicesUpsertAddNew(t *testing.T) {
 	}
 }
 
+func TestServicesUpsertRoundTripsMethods(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	srv := newTestServer(withStore(ms))
+
+	body := `{"services":[{"name":"stripe","host":"api.stripe.com","methods":["get","HEAD"],"auth":{"type":"bearer","token":"STRIPE_KEY"}}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/vaults/default/services", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/vaults/default/services", nil)
+	getReq.Header.Set("Authorization", "Bearer "+token)
+	getRec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+
+	var resp struct {
+		Services []struct {
+			Name    string   `json:"name"`
+			Methods []string `json:"methods"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode GET response: %v", err)
+	}
+	if len(resp.Services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(resp.Services))
+	}
+	if want := []string{"GET", "HEAD"}; !slices.Equal(resp.Services[0].Methods, want) {
+		t.Fatalf("methods = %v, want %v", resp.Services[0].Methods, want)
+	}
+}
+
 // TestServicesUpsertRejectsMissingNameForNewService pins the
 // "name is required for new services" contract: an empty-Name upsert
 // against an empty vault has no existing entry to adopt by host, so

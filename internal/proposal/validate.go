@@ -73,6 +73,9 @@ func Validate(services []Service, credentials []CredentialSlot) error {
 		if err := broker.ValidatePort(s.Port); err != nil {
 			return fmt.Errorf("service %d: %w", i, err)
 		}
+		if _, err := broker.NormalizeMethodList(s.Methods); err != nil {
+			return fmt.Errorf("service %d: %w", i, err)
+		}
 		if s.Action == ActionSet {
 			if s.Auth == nil && s.Enabled == nil {
 				return fmt.Errorf("service %d: set action requires auth or enabled change", i)

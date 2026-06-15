@@ -35,6 +35,8 @@ type Service struct {
 	Enabled       *bool          `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	Auth          Auth           `yaml:"auth" json:"auth"`
 	Substitutions []Substitution `yaml:"substitutions,omitempty" json:"substitutions,omitempty"`
+	// fork-local: Store optional method policy; enforcement lives in later slices.
+	Methods []string `yaml:"methods,omitempty" json:"methods,omitempty"`
 }
 
 // MatcherPattern returns the joined inline form (`slack.com/api/*`),
@@ -371,6 +373,9 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("service %d: %w", i, err)
 		}
 		if err := ValidatePort(s.Port); err != nil {
+			return fmt.Errorf("service %d: %w", i, err)
+		}
+		if err := NormalizeMethods(&cfg.Services[i]); err != nil {
 			return fmt.Errorf("service %d: %w", i, err)
 		}
 		if err := s.Auth.Validate(); err != nil {

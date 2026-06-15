@@ -1,0 +1,5 @@
+Code Simplifier review: fixed method validation to accept any valid HTTP token, not only the common standard verbs, matching the slice pseudocode.
+
+Verification:
+- git diff --check passed.
+- Go toolchain unavailable in this environment (`go`, `gofmt` not found), so Go tests and gofmt were not run.

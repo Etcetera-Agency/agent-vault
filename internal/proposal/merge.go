@@ -82,12 +82,15 @@ func MergeServices(existing []broker.Service, proposed []Service) ([]broker.Serv
 }
 
 func toBrokerService(p Service) broker.Service {
+	methods, _ := broker.NormalizeMethodList(p.Methods)
 	svc := broker.Service{
 		Name:    p.Name,
 		Host:    p.Host,
 		Path:    p.Path,
 		Port:    p.Port,
 		Enabled: p.Enabled,
+		// fork-local: Empty methods intentionally widens service back to any method.
+		Methods: methods,
 	}
 	if p.Auth != nil {
 		svc.Auth = *p.Auth

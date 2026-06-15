@@ -191,10 +191,11 @@ File mode (upsert, not replace-all):
 			}
 
 			name, _ := cmd.Flags().GetString("name")
+			methods, _ := cmd.Flags().GetStringSlice("method")
 
 			host, path, port := broker.SplitInlineHost(host, "")
 
-			svc := broker.Service{Name: name, Host: host, Path: path, Port: port, Auth: *auth}
+			svc := broker.Service{Name: name, Host: host, Path: path, Port: port, Auth: *auth, Methods: methods}
 			if disabled, _ := cmd.Flags().GetBool("disabled"); disabled {
 				f := false
 				svc.Enabled = &f
@@ -412,6 +413,7 @@ func init() {
 	serviceAddCmd.Flags().String("api-key-key", "", "Credential key for api-key auth")
 	serviceAddCmd.Flags().String("api-key-header", "", "Header name for api-key (default Authorization)")
 	serviceAddCmd.Flags().String("api-key-prefix", "", "Prefix for api-key value")
+	serviceAddCmd.Flags().StringSlice("method", nil, "Allowed HTTP method; repeat or comma-separate. Use '*' or omit for any method")
 	serviceAddCmd.Flags().Bool("disabled", false, "Create the service in a disabled state (proxy traffic returns 403 until enabled)")
 
 	// service remove flags

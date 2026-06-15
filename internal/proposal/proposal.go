@@ -50,6 +50,8 @@ type Service struct {
 	Enabled       *bool                 `json:"enabled,omitempty"`
 	Auth          *broker.Auth          `json:"auth,omitempty"`
 	Substitutions []broker.Substitution `json:"substitutions,omitempty"`
+	// fork-local: Proposed method policy must survive apply exactly as requested.
+	Methods []string `json:"methods,omitempty"`
 }
 
 // MatcherPattern returns the joined inline form (`slack.com/api/*`),
