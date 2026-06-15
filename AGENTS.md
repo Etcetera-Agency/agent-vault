@@ -112,3 +112,26 @@ Content-Type: application/json
 - **Never** hardcode tokens — always read from `AGENT_VAULT_TOKEN`
 - **Only** request services returned by `/discover` — if not listed, propose a proposal
 - Do not modify or forge the `Authorization` header beyond using your token
+
+## Hard Rules
+
+- No push without explicit user approval.
+- Use separate feature branch for repo work unless user explicitly requests `main`.
+- Merge into `main` only when user explicitly requests it.
+- OpenSpec work uses TDD: proposal/tasks first, failing tests next, impl after.
+- OpenSpec proposals may use caveman style when it keeps requirements clear and specific.
+- For OpenSpec work, keep full cycle moving: load context, create proposal, implement, test, update TODO, archive.
+- Use matching OpenSpec skills for each phase; do not skip proposal/implementation/archive workflow.
+- During OpenSpec implementation, use Code Simplifier before finishing each implemented slice.
+- Tell user next OpenSpec step after each phase.
+- If OpenSpec work needs missing skills/framework, install them before work.
+- OpenSpec skills/source: `https://github.com/forztf/open-skilled-sdd`
+- Code Simplifier skill/source: `https://github.com/troykelly/codex-skills/tree/main/skills/code-simplifier`
+- Caveman skill/source: `https://github.com/mattpocock/skills/tree/main/skills/productivity/caveman`
+
+## Commit Message Rules
+
+- Subject: concise sentence naming real change; no bullet marker.
+- Body: bullets for behavior, specs/docs, verification.
+- Avoid vague titles: "implement slices", "archive changes", "misc fixes".
+- Avoid weak verification-only bullets for docs-only changes, e.g. `git diff --check passed`.
