@@ -1,0 +1,56 @@
+---
+title: "Agent service profile"
+description: "Seed a narrow Gmail, Calendar, Discord, and Telegram service profile for an agent vault."
+---
+
+The agent service profile is an example starting allowlist for a vault named `agent`. It uses strict host, path, and method rules for the first common agent integrations:
+
+- Gmail message list/read: `GET` only.
+- Google Calendar events read: `GET` only.
+- Discord channel message send: `POST` only.
+- Telegram Bot API send paths: `POST` only, with a path placeholder for the bot token.
+
+Before applying it, set the vault's unmatched-host policy to `deny`. The profile assumes strict deny mode; unmatched sibling paths must fail closed instead of falling through as plain proxy traffic.
+
+## Apply the services
+
+```bash
+agent-vault vault service set --vault agent -f examples/agent-service-profile/services.yaml
+```
+
+The service file contains only credential key names:
+
+```text
+GOOGLE_ACCESS_TOKEN=__google_access_token__
+DISCORD_BOT_TOKEN=__discord_bot_token__
+TELEGRAM_BOT_TOKEN=__telegram_bot_token__
+```
+
+Agents should use placeholder values like the examples above. Real values stay in Agent Vault and are injected or substituted at proxy time.
+
+## Seed credential slots
+
+Use the proposal example if an agent or operator wants an approval flow for the required credentials:
+
+```bash
+agent-vault vault proposal create --vault agent -f examples/agent-service-profile/credential-proposal.json
+```
+
+The proposal includes obtain instructions for:
+
+- `GOOGLE_ACCESS_TOKEN`: obtain a Google OAuth access token with the minimum Gmail read and Calendar events read scopes needed by the agent.
+- `DISCORD_BOT_TOKEN`: create or select a Discord application bot, copy the bot token, and grant message-send permission in the target channel.
+- `TELEGRAM_BOT_TOKEN`: create or select a bot with BotFather and store the token in Agent Vault.
+
+## Verify before use
+
+Do not let an agent rely on the profile until URL-shape verification passes against the client or SDK it will actually use. Confirm:
+
+- Gmail message list/read calls hit `gmail.googleapis.com/gmail/v1/users/me/messages*`.
+- Calendar events reads hit `www.googleapis.com/calendar/v3/calendars/*/events*`.
+- Discord message sends hit `discord.com/api/v10/channels/*/messages`.
+- Telegram calls keep `__bot_token__` in the agent-facing path and only Agent Vault rewrites it before forwarding.
+
+Check request logs after verification. Each accepted or rejected request should show the method, host, path, matched service, status, and latency. Logs and `/discover` expose service names and credential key names only, never credential values or the resolved Telegram bot token.
+
+The profile rules are normal services. Vault admins can edit their host/path, methods, enabled state, auth, and substitutions in the Services tab.

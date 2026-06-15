@@ -1,0 +1,32 @@
+vault: agent
+services:
+  - name: gmail-list-read
+    host: gmail.googleapis.com/gmail/v1/users/me/messages*
+    methods: ["GET"]
+    auth:
+      type: bearer
+      token: GOOGLE_ACCESS_TOKEN
+
+  - name: calendar-events-read
+    host: www.googleapis.com/calendar/v3/calendars/*/events*
+    methods: ["GET"]
+    auth:
+      type: bearer
+      token: GOOGLE_ACCESS_TOKEN
+
+  - name: discord-channel-messages
+    host: discord.com/api/v10/channels/*/messages
+    methods: ["POST"]
+    auth:
+      type: bearer
+      token: DISCORD_BOT_TOKEN
+
+  - name: telegram-bot-api
+    host: api.telegram.org/bot__bot_token__/*
+    methods: ["POST"]
+    auth:
+      type: passthrough
+    substitutions:
+      - key: TELEGRAM_BOT_TOKEN
+        placeholder: __bot_token__
+        in: ["path"]
