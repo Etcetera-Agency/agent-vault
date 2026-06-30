@@ -506,7 +506,11 @@ func TestMITMForwardEmitsRequestLogRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.Do: %v", err)
 	}
+	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
 
 	rows := sink.snapshot()
 	if len(rows) != 1 {
