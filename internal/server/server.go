@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/ratelimit"
 	"github.com/Infisical/agent-vault/internal/requestlog"
 	"github.com/Infisical/agent-vault/internal/store"
+	"github.com/Infisical/agent-vault/internal/telemetry"
 )
 
 //go:embed all:webdist
@@ -61,7 +63,8 @@ type Server struct {
 	store       Store
 	encKey      []byte // 32-byte encryption key, held in memory while running
 	notifier    *notify.Notifier
-	initialized bool                // true when at least one owner account exists
+	initialized    bool                // true when at least one owner account exists
+	lastInitCheck  atomic.Int64        // unix-millis of last DB check for initialization (throttle)
 	baseURL     string              // externally-reachable base URL (e.g. "https://sb.example.com")
 	skillCLI    []byte              // embedded CLI skill content (served at GET /v1/skills/cli)
 	mitm        *mitm.Proxy         // transparent MITM proxy; nil only when --mitm-port 0
@@ -76,12 +79,6 @@ type Server struct {
 	// backstop. Bounded by a periodic prune (see runTouchCachePruner)
 	// that drops entries past the throttle window.
 	touchCache sync.Map // raw token (string) -> time.Time
-	// vaultServiceMu serializes the load → mutate → save cycle for
-	// /services handlers and proposal apply. SQLite's MaxOpenConns(1)
-	// only serializes individual statements; without this lock two
-	// concurrent upserts can both pass collision checks against the
-	// same pre-state.
-	vaultServiceMu sync.Map // vaultID (string) -> *sync.Mutex
 	// infisicalClient is nil when INFISICAL_URL is unset; create handlers
 	// reject kind="infisical" then.
 	infisicalClient *infisical.Client
@@ -91,15 +88,13 @@ type Server struct {
 	// in Run alongside the syncer when a client is attached. Nil disables it.
 	infisicalDynamic *infisical.DynamicResolver
 	oauthRefresher   *oauth.Refresher
+	telemetry        *telemetry.Telemetry
 }
 
-// lockVaultServices acquires the per-vault mutation lock. Callers MUST
-// defer the returned unlock func.
-func (s *Server) lockVaultServices(vaultID string) func() {
-	v, _ := s.vaultServiceMu.LoadOrStore(vaultID, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
+// lockVaultServices acquires the per-vault mutation lock via the store's
+// LockVault. Callers MUST defer the returned unlock func.
+func (s *Server) lockVaultServices(ctx context.Context, vaultID string) (func(), error) {
+	return s.store.LockVault(ctx, vaultID)
 }
 
 // RateLimit returns the server's rate-limit registry. Exported so the
@@ -132,6 +127,51 @@ func (s *Server) AttachLogSink(sink requestlog.Sink) {
 // LogSink returns the server's log sink. Shared with the MITM ingress so
 // both paths feed the same pipeline.
 func (s *Server) LogSink() requestlog.Sink { return s.logSink }
+
+// AttachTelemetry sets the PostHog telemetry client. When nil (the
+// default), captureEvent is a no-op.
+func (s *Server) AttachTelemetry(t *telemetry.Telemetry) { s.telemetry = t }
+
+// captureEvent sends a telemetry event if telemetry is configured.
+// actor may be nil for pre-auth endpoints (login, register); callers
+// pass what they already have and never re-resolve from the DB.
+func (s *Server) captureEvent(r *http.Request, event string, actor *Actor, extra map[string]string) {
+	if s.telemetry == nil {
+		return
+	}
+	props := make(map[string]string, len(extra)+3)
+	for k, v := range extra {
+		props[k] = v
+	}
+
+	if avClient := r.Header.Get("X-AV-Client"); avClient != "" {
+		props["source"] = "cli"
+		props["client_version"] = avClient
+	} else if _, err := r.Cookie("av_session"); err == nil {
+		props["source"] = "web"
+	} else {
+		props["source"] = "api"
+	}
+
+	distinctID := ""
+	if actor != nil {
+		props["actor_type"] = actor.Type
+		if actor.User != nil {
+			distinctID = actor.User.Email
+		} else if actor.Agent != nil {
+			distinctID = "agent:" + actor.Agent.Name
+		}
+	}
+	if distinctID == "" {
+		if email, ok := extra["email"]; ok && email != "" {
+			distinctID = email
+		} else {
+			distinctID = "anonymous_server"
+		}
+	}
+
+	s.telemetry.CaptureEvent(distinctID, event, props)
+}
 
 // SessionResolver returns a brokercore.SessionResolver backed by this
 // server's store.
@@ -217,6 +257,7 @@ type Store interface {
 	CreateUser(ctx context.Context, email string, passwordHash, passwordSalt []byte, role string, kdfTime uint32, kdfMemory uint32, kdfThreads uint8) (*store.User, error)
 	GetUserByEmail(ctx context.Context, email string) (*store.User, error)
 	GetUserByID(ctx context.Context, id string) (*store.User, error)
+	GetUserEmailByID(ctx context.Context, id string) (string, error)
 	ListUsers(ctx context.Context) ([]store.User, error)
 	UpdateUserRole(ctx context.Context, userID, role string) error
 	UpdateUserPassword(ctx context.Context, userID string, passwordHash, passwordSalt []byte, kdfTime uint32, kdfMemory uint32, kdfThreads uint8) error
@@ -340,6 +381,7 @@ type Store interface {
 	CreateAgent(ctx context.Context, name, createdBy, role string) (*store.Agent, error)
 	CreateAgentWithGrantsAndToken(ctx context.Context, name, createdBy, role string, vaultGrants []store.AgentVaultGrantSpec, tokenExpiresAt *time.Time) (*store.Agent, *store.Session, error)
 	GetAgentByID(ctx context.Context, id string) (*store.Agent, error)
+	GetAgentNameByID(ctx context.Context, id string) (string, error)
 	GetAgentByName(ctx context.Context, name string) (*store.Agent, error)
 	ListAgents(ctx context.Context, vaultID string) ([]store.Agent, error)
 	ListAllAgents(ctx context.Context) ([]store.Agent, error)
@@ -362,7 +404,12 @@ type Store interface {
 	TrimRequestLogsToCap(ctx context.Context, vaultID string, cap int64) (int64, error)
 	VaultIDsWithLogs(ctx context.Context) ([]string, error)
 
+	// LockVault acquires an exclusive advisory lock for the given vault.
+	LockVault(ctx context.Context, vaultID string) (unlock func(), err error)
+
 	Close() error
+	Ping(ctx context.Context) error
+	DialectName() string
 }
 
 // contextKey is an unexported type for context keys in this package.
@@ -834,6 +881,7 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 	mux.HandleFunc("DELETE /v1/vaults/{name}", s.requireInitialized(s.requireAuth(actorAuthed(s.handleVaultDelete))))
 	mux.HandleFunc("POST /v1/vaults/{name}/rename", s.requireInitialized(s.requireAuth(actorAuthed(limitBody(s.handleVaultRename)))))
 	mux.HandleFunc("POST /v1/vaults/{name}/join", s.requireInitialized(s.requireAuth(actorAuthed(limitBody(s.handleVaultJoin)))))
+	mux.HandleFunc("POST /v1/vaults/{name}/leave", s.requireInitialized(s.requireAuth(actorAuthed(limitBody(s.handleVaultLeave)))))
 	mux.HandleFunc("GET /v1/vaults/{name}/settings", s.requireInitialized(s.requireAuth(actorAuthed(s.handleVaultSettingsGet))))
 	mux.HandleFunc("PATCH /v1/vaults/{name}/settings", s.requireInitialized(s.requireAuth(actorAuthed(limitBody(s.handleVaultSettingsPatch)))))
 	mux.HandleFunc("PATCH /v1/vaults/{name}/credential-store", s.requireInitialized(s.requireAuth(actorAuthed(limitBody(s.handleVaultCredentialStorePatch)))))
@@ -910,14 +958,30 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 }
 
 // requireInitialized returns 503 when no owner account exists yet.
+// In multi-instance (Postgres HA) deployments another instance may have
+// handled registration, so we re-check the DB when the in-memory flag is
+// false, throttled to once every 2 seconds to avoid per-request queries.
 func (s *Server) requireInitialized(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.initialized {
-			jsonStatus(w, http.StatusServiceUnavailable, map[string]string{
-				"error":   "not_initialized",
-				"message": "No owner account exists. Run 'agent-vault auth register' to create the first account.",
-			})
-			return
+			now := time.Now().UnixMilli()
+			if now-s.lastInitCheck.Load() < 2000 {
+				jsonStatus(w, http.StatusServiceUnavailable, map[string]string{
+					"error":   "not_initialized",
+					"message": "No owner account exists. Run 'agent-vault auth register' to create the first account.",
+				})
+				return
+			}
+			s.lastInitCheck.Store(now)
+			if count, err := s.store.CountUsers(r.Context()); err == nil && count > 0 {
+				s.initialized = true
+			} else {
+				jsonStatus(w, http.StatusServiceUnavailable, map[string]string{
+					"error":   "not_initialized",
+					"message": "No owner account exists. Run 'agent-vault auth register' to create the first account.",
+				})
+				return
+			}
 		}
 		next(w, r)
 	}

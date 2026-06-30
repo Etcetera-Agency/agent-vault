@@ -32,7 +32,7 @@ func TestCommandsRegistered(t *testing.T) {
 		registered[c.Name()] = true
 	}
 
-	expected := []string{"server", "auth", "vault", "owner", "account", "catalog", "user", "agent", "ca"}
+	expected := []string{"server", "auth", "vault", "owner", "account", "catalog", "user", "agent", "ca", "migrate-db"}
 	for _, name := range expected {
 		if !registered[name] {
 			t.Errorf("expected command %q to be registered, but it was not", name)
@@ -343,6 +343,36 @@ func TestServerCmd_RefusesWhenPIDFileLive(t *testing.T) {
 	}
 }
 
+func TestEnsureServerStopped_BlocksWithDATABASE_URL(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/testdb")
+	err := ensureServerStopped(false)
+	if err == nil {
+		t.Fatal("expected error when DATABASE_URL is set without --force, got nil")
+	}
+	if !strings.Contains(err.Error(), "--force") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "--force")
+	}
+}
+
+func TestEnsureServerStopped_AllowsForceWithDATABASE_URL(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/testdb")
+	err := ensureServerStopped(true)
+	if err != nil {
+		t.Fatalf("expected no error with --force, got %v", err)
+	}
+}
+
+func TestResetCmd_BlocksWithDATABASE_URL(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://user:pass@localhost:5432/testdb")
+	_, err := executeCommand("owner", "reset", "--yes")
+	if err == nil {
+		t.Fatal("expected error when DATABASE_URL is set, got nil")
+	}
+	if !strings.Contains(err.Error(), "not supported") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "not supported")
+	}
+}
+
 func TestServerPasswordStdinFlag(t *testing.T) {
 	var srvCmd *cobra.Command
 	for _, c := range rootCmd.Commands() {
@@ -364,7 +394,7 @@ func TestServerPasswordStdinFlag(t *testing.T) {
 	}
 }
 
-func openTestDB(t *testing.T) *store.SQLiteStore {
+func openTestDB(t *testing.T) store.Store {
 	t.Helper()
 	db, err := store.Open(":memory:")
 	if err != nil {

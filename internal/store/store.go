@@ -411,6 +411,16 @@ type PasswordReset struct {
 	ExpiresAt time.Time
 }
 
+// CAState holds the persisted CA root certificate and encrypted private key.
+type CAState struct {
+	RootCert     []byte
+	RootKeyCT    []byte
+	RootKeyNonce []byte
+	Source       string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
 // Store is the persistence interface for Agent Vault.
 // All methods are safe for concurrent use.
 type Store interface {
@@ -444,6 +454,7 @@ type Store interface {
 	CreateUser(ctx context.Context, email string, passwordHash, passwordSalt []byte, role string, kdfTime uint32, kdfMemory uint32, kdfThreads uint8) (*User, error)
 	GetUserByEmail(ctx context.Context, email string) (*User, error)
 	GetUserByID(ctx context.Context, id string) (*User, error)
+	GetUserEmailByID(ctx context.Context, id string) (string, error)
 	ListUsers(ctx context.Context) ([]User, error)
 	UpdateUserRole(ctx context.Context, userID, role string) error
 	UpdateUserPassword(ctx context.Context, userID string, passwordHash, passwordSalt []byte, kdfTime uint32, kdfMemory uint32, kdfThreads uint8) error
@@ -543,6 +554,7 @@ type Store interface {
 	// an agent row without a token or with half-applied grants.
 	CreateAgentWithGrantsAndToken(ctx context.Context, name, createdBy, role string, vaultGrants []AgentVaultGrantSpec, tokenExpiresAt *time.Time) (*Agent, *Session, error)
 	GetAgentByID(ctx context.Context, id string) (*Agent, error)
+	GetAgentNameByID(ctx context.Context, id string) (string, error)
 	GetAgentByName(ctx context.Context, name string) (*Agent, error)
 	ListAgents(ctx context.Context, vaultID string) ([]Agent, error)
 	ListAllAgents(ctx context.Context) ([]Agent, error)
@@ -601,8 +613,20 @@ type Store interface {
 	TrimRequestLogsToCap(ctx context.Context, vaultID string, cap int64) (int64, error)
 	VaultIDsWithLogs(ctx context.Context) ([]string, error)
 
+	// CA state (persistent CA root for Postgres HA deployments)
+	GetCAState(ctx context.Context) (*CAState, error)
+	SetCAState(ctx context.Context, state *CAState) error
+
+	// LockVault acquires an exclusive advisory lock for the given vault.
+	// The returned function releases the lock. Callers MUST defer the
+	// release. SQLite uses an in-memory per-vault mutex; Postgres uses
+	// pg_advisory_lock on a pinned connection.
+	LockVault(ctx context.Context, vaultID string) (unlock func(), err error)
+
 	// Lifecycle
 	Close() error
+	Ping(ctx context.Context) error
+	DialectName() string
 }
 
 // DefaultDBPath returns the default path for the SQLite database file (~/.agent-vault/agent-vault.db).

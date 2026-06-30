@@ -25,12 +25,15 @@ description: "Complete reference for all Agent Vault CLI commands."
     | `--log-level` | `info` | Log level: `info` (default) or `debug`. At `debug`, emits one structured line per proxied request on stderr covering method, host, path, matched service, injected credential key names, upstream status, and duration. Credential **values** are never logged. |
     | `--max-response-bytes` | `0` (unlimited) | Maximum response body bytes the MITM proxy streams back to agents. `0` means unlimited — responses are streamed with a small buffer so there is no memory risk. When a limit is set and the upstream response exceeds it, the proxy returns 502 (if the size is known upfront) or aborts the connection mid-stream (if chunked). Also respects `AGENT_VAULT_MAX_RESPONSE_BYTES`; the flag takes precedence. |
     | `--max-request-bytes` | `1073741824` (1 GiB) | Maximum request body bytes the MITM proxy forwards to upstreams. Requests exceeding this receive HTTP 413. Also respects `AGENT_VAULT_MAX_REQUEST_BYTES`; the flag takes precedence. |
+    | `--database-url` | (empty, SQLite) | PostgreSQL connection URL for [production deployments](/self-hosting/postgres). When set, Agent Vault uses Postgres instead of the built-in SQLite database. Also respects `DATABASE_URL`; the flag takes precedence. |
+    | `--telemetry` | `true` | Enable or disable anonymous usage telemetry. Also respects the `AGENT_VAULT_TELEMETRY` env var; the env var takes precedence. |
 
     **Environment variables:**
 
     | Variable | Description |
     |----------|-------------|
     | `PORT` | Server listen port (default `14321`). The `--port` flag takes precedence. |
+    | `DATABASE_URL` | PostgreSQL connection URL (e.g. `postgres://user:pass@host:5432/agentvault`). When set, Agent Vault uses Postgres instead of SQLite. The `--database-url` flag takes precedence. See [PostgreSQL](/self-hosting/postgres). |
     | `AGENT_VAULT_MASTER_PASSWORD` | Derives a KEK that wraps the data encryption key. Omit for passwordless mode. |
     | `AGENT_VAULT_LOG_LEVEL` | Fallback for `--log-level` when the flag is not set. Accepts `info` or `debug`. |
     | `AGENT_VAULT_MAX_RESPONSE_BYTES` | Maximum response body bytes streamed to agents (default `0` = unlimited). The `--max-response-bytes` flag takes precedence. |
@@ -62,6 +65,7 @@ description: "Complete reference for all Agent Vault CLI commands."
     | `INFISICAL_LDAP_AUTH_IDENTITY_ID` | LDAP Auth identity ID. All three LDAP vars are required together. |
     | `INFISICAL_LDAP_AUTH_USERNAME` | LDAP bind username. |
     | `INFISICAL_LDAP_AUTH_PASSWORD` | LDAP bind password. |
+    | `AGENT_VAULT_TELEMETRY` | Set to `false` to disable anonymous usage telemetry. No credential values or request payloads are ever included. |
   </Accordion>
 
   <Accordion title="agent-vault server stop">
@@ -70,6 +74,42 @@ description: "Complete reference for all Agent Vault CLI commands."
     ```
 
     Stop a running server. Reads the PID from `~/.agent-vault/agent-vault.pid` and sends SIGTERM.
+  </Accordion>
+</AccordionGroup>
+
+## Database migration
+
+<AccordionGroup>
+  <Accordion title="agent-vault migrate-db">
+    ```bash
+    agent-vault migrate-db [flags]
+    ```
+
+    Copy all data from the current SQLite database to a PostgreSQL instance. The server must be stopped before running this command. The source SQLite database is not modified.
+
+    After a successful migration, set `DATABASE_URL` (or `--database-url` on the server) and restart. See [PostgreSQL](/self-hosting/postgres) for the full guide.
+
+    | Flag | Default | Description |
+    |------|---------|-------------|
+    | `--to` | | Destination PostgreSQL connection URL (required). Example: `postgres://user:pass@host:5432/agentvault`. |
+    | `--from` | `~/.agent-vault/agent-vault.db` | Source SQLite database path. Override only if using a non-default data directory. |
+    | `--dry-run` | `false` | Validate connectivity and print a row-count summary without writing any data. |
+    | `--yes`, `-y` | `false` | Skip the interactive confirmation prompt. Useful for scripted or CI usage. |
+
+    ```bash
+    # Preview what would be migrated
+    agent-vault migrate-db --to postgres://user:pass@db:5432/agentvault --dry-run
+
+    # Run the migration
+    agent-vault migrate-db --to postgres://user:pass@db:5432/agentvault
+
+    # Run without confirmation (scripted/CI)
+    agent-vault migrate-db --to postgres://user:pass@db:5432/agentvault --yes
+
+    # Migrate from a non-default SQLite path
+    agent-vault migrate-db --from /data/.agent-vault/agent-vault.db \
+      --to postgres://user:pass@db:5432/agentvault
+    ```
   </Accordion>
 </AccordionGroup>
 
@@ -339,6 +379,7 @@ description: "Complete reference for all Agent Vault CLI commands."
     | `--no-firewall` | `false` | Skip the iptables egress lockdown (`--isolation=container` only; debug, prints a warning). |
     | `--home-volume-shared` | `false` | Share `/home/claude/.claude` across invocations via a persistent docker volume (`--isolation=container` only). Default is a per-invocation volume — auth doesn't persist but concurrent runs can't corrupt each other. |
     | `--share-agent-dir` | `false` | Bind-mount the host's agent state dir (`~/.claude`) at `/home/claude/.claude` so the container reuses your host login (`--isolation=container` only). On Linux the container's `claude` user is remapped to your host uid/gid so writes land owned by you. Mutually exclusive with `--home-volume-shared`. |
+    | `--telemetry` | `true` | Enable or disable anonymous usage telemetry. Also respects the `AGENT_VAULT_TELEMETRY` env var; the env var takes precedence. |
   </Accordion>
 
   <Accordion title="agent-vault vault token">
@@ -1002,31 +1043,45 @@ description: "Complete reference for all Agent Vault CLI commands."
 
 ## Master password
 
-Manage the master password that wraps the data encryption key (DEK). All commands require the server to be stopped.
+Manage the master password that wraps the data encryption key (DEK). All commands require the server to be stopped. When `DATABASE_URL` is set, these commands require `--force` because multiple instances may share the database -- stop all instances first.
+
+Password changes only re-wrap the encryption key (one database row). No credentials are re-encrypted and no data is lost. If an instance restarts before the secret store is updated, it will fail to start with "wrong password" -- update the secret and restart to resolve.
 
 <AccordionGroup>
   <Accordion title="agent-vault master-password set">
     ```bash
-    agent-vault master-password set
+    agent-vault master-password set [--force]
     ```
 
     Set a master password on a passwordless instance. Wraps the existing DEK under a new KEK derived from the password. No credentials are re-encrypted.
+
+    | Flag | Description |
+    |------|-------------|
+    | `--force` | Proceed when `DATABASE_URL` is set. Requires all instances to be stopped. |
   </Accordion>
 
   <Accordion title="agent-vault master-password change">
     ```bash
-    agent-vault master-password change
+    agent-vault master-password change [--force]
     ```
 
     Change the master password. Re-wraps the DEK under a new KEK. No credentials are re-encrypted.
+
+    | Flag | Description |
+    |------|-------------|
+    | `--force` | Proceed when `DATABASE_URL` is set. Requires all instances to be stopped. |
   </Accordion>
 
   <Accordion title="agent-vault master-password remove">
     ```bash
-    agent-vault master-password remove
+    agent-vault master-password remove [--force]
     ```
 
     Remove the master password, switching to passwordless mode. The DEK is stored in plaintext — security depends on filesystem access controls.
+
+    | Flag | Description |
+    |------|-------------|
+    | `--force` | Proceed when `DATABASE_URL` is set. Requires all instances to be stopped. |
   </Accordion>
 </AccordionGroup>
 

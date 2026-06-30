@@ -389,7 +389,15 @@ func (m *mockStore) ExpirePendingProposals(_ context.Context, before time.Time) 
 	return 0, nil
 }
 
-func (m *mockStore) Close() error { return nil }
+func (m *mockStore) Close() error                                     { return nil }
+func (m *mockStore) Ping(_ context.Context) error                      { return nil }
+func (m *mockStore) DialectName() string                               { return "sqlite" }
+func (m *mockStore) GetCAState(_ context.Context) (*store.CAState, error) { return nil, nil }
+func (m *mockStore) SetCAState(_ context.Context, _ *store.CAState) error { return nil }
+
+func (m *mockStore) LockVault(_ context.Context, _ string) (func(), error) {
+	return func() {}, nil
+}
 
 // --- Request log stubs (unused in server tests; storage-level tests
 // live in the store package). ---
@@ -425,6 +433,15 @@ func (m *mockStore) GetUserByID(_ context.Context, id string) (*store.User, erro
 		}
 	}
 	return nil, fmt.Errorf("user not found")
+}
+
+func (m *mockStore) GetUserEmailByID(_ context.Context, id string) (string, error) {
+	for _, u := range m.users {
+		if u.ID == id {
+			return u.Email, nil
+		}
+	}
+	return "", fmt.Errorf("user not found")
 }
 
 func (m *mockStore) ListUsers(_ context.Context) ([]store.User, error) {
@@ -926,6 +943,15 @@ func (m *mockStore) GetAgentByID(_ context.Context, id string) (*store.Agent, er
 		}
 	}
 	return nil, fmt.Errorf("agent not found")
+}
+
+func (m *mockStore) GetAgentNameByID(_ context.Context, id string) (string, error) {
+	for _, ag := range m.agents {
+		if ag.ID == id {
+			return ag.Name, nil
+		}
+	}
+	return "", fmt.Errorf("agent not found")
 }
 
 func (m *mockStore) UpdateAgentRole(_ context.Context, agentID, role string) error {
@@ -7521,5 +7547,78 @@ func TestCredentialProvider_LateBindsDynamicResolver(t *testing.T) {
 	srv.infisicalDynamic = infisical.NewDynamicResolver(srv.store, nil, slog.New(slog.DiscardHandler))
 	if _, ok, err := p.Dynamic.Resolve(context.Background(), "v1", "SOME_KEY"); ok || err != nil {
 		t.Fatalf("post-bind: expected ok=false err=nil, got ok=%v err=%v", ok, err)
+	}
+}
+
+func TestVaultLeaveMemberSuccess(t *testing.T) {
+	ms, _ := setupMockStoreWithSession(t)
+	memberToken := setupMemberSession(t, ms, "root-ns-id")
+	srv := newTestServer(withStore(ms))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/vaults/default/leave", nil)
+	req.Header.Set("Authorization", "Bearer "+memberToken)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	has, _ := ms.HasVaultAccess(context.Background(), "member-user-id", "root-ns-id")
+	if has {
+		t.Fatal("expected member to no longer have vault access after leaving")
+	}
+}
+
+func TestVaultLeaveLastAdminBlocked(t *testing.T) {
+	ms, ownerToken := setupMockStoreWithSession(t)
+	srv := newTestServer(withStore(ms))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/vaults/default/leave", nil)
+	req.Header.Set("Authorization", "Bearer "+ownerToken)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestVaultLeaveAdminWithOtherAdmins(t *testing.T) {
+	ms, ownerToken := setupMockStoreWithSession(t)
+	// Add a second admin so the owner can leave.
+	ms.users["admin2@test.com"] = &store.User{
+		ID: "admin2-user-id", Email: "admin2@test.com", Role: "member", IsActive: true,
+	}
+	ms.GrantVaultRole(context.Background(), "admin2-user-id", "user", "root-ns-id", "admin")
+	srv := newTestServer(withStore(ms))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/vaults/default/leave", nil)
+	req.Header.Set("Authorization", "Bearer "+ownerToken)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	has, _ := ms.HasVaultAccess(context.Background(), "owner-user-id", "root-ns-id")
+	if has {
+		t.Fatal("expected owner to no longer have vault access after leaving")
+	}
+}
+
+func TestVaultLeaveNoAccess(t *testing.T) {
+	ms, _ := setupMockStoreWithSession(t)
+	memberToken := setupMemberSession(t, ms) // no vault grants
+	srv := newTestServer(withStore(ms))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/vaults/default/leave", nil)
+	req.Header.Set("Authorization", "Bearer "+memberToken)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
 	}
 }

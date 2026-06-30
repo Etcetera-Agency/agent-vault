@@ -534,6 +534,7 @@ func (s *Server) handleVaultCreate(w http.ResponseWriter, r *http.Request) {
 	// Creator becomes vault admin.
 	_ = s.store.GrantVaultRole(ctx, actor.ID, actor.Type, ns.ID, "admin")
 
+	s.captureEvent(r, "av.vault-create", actor, map[string]string{"vault": req.Name})
 	jsonCreated(w, map[string]interface{}{
 		"id":         ns.ID,
 		"name":       ns.Name,
@@ -867,6 +868,8 @@ func (s *Server) handleVaultDelete(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "Failed to delete vault")
 		return
 	}
+	actor, _ := s.actorFromSession(r.Context(), sessionFromContext(r.Context()))
+	s.captureEvent(r, "av.vault-delete", actor, map[string]string{"vault": name})
 	jsonOK(w, map[string]interface{}{"name": name, "deleted": true})
 }
 
@@ -995,6 +998,47 @@ func (s *Server) handleVaultSettingsPatch(w http.ResponseWriter, r *http.Request
 		return
 	}
 	jsonOK(w, map[string]interface{}{"unmatched_host_policy": string(policy)})
+}
+
+func (s *Server) handleVaultLeave(w http.ResponseWriter, r *http.Request) {
+	vaultName := r.PathValue("name")
+	ctx := r.Context()
+
+	vault, err := s.store.GetVault(ctx, vaultName)
+	if err != nil || vault == nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("Vault %q not found", vaultName))
+		return
+	}
+
+	actor, err := s.requireVaultAccess(w, r, vault.ID)
+	if err != nil {
+		return
+	}
+	if actor == nil {
+		jsonError(w, http.StatusForbidden, "Scoped sessions cannot leave a vault")
+		return
+	}
+
+	role, _ := s.store.GetVaultRole(ctx, actor.ID, vault.ID)
+	if role == "" {
+		jsonError(w, http.StatusConflict, "You do not have an explicit grant on this vault")
+		return
+	}
+
+	if role == "admin" {
+		adminCount, _ := s.store.CountVaultAdmins(ctx, vault.ID)
+		if adminCount <= 1 {
+			jsonError(w, http.StatusConflict, "Cannot leave as the last admin of this vault")
+			return
+		}
+	}
+
+	if err := s.store.RevokeVaultAccess(ctx, actor.ID, vault.ID); err != nil {
+		jsonError(w, http.StatusInternalServerError, "Failed to leave vault")
+		return
+	}
+
+	jsonOK(w, map[string]string{"message": fmt.Sprintf("left vault %s", vaultName)})
 }
 
 func (s *Server) handleVaultJoin(w http.ResponseWriter, r *http.Request) {
