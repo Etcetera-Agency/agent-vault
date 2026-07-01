@@ -49,11 +49,11 @@
 
 ## 7. SMTP Proxy
 
-- [ ] 7.1 Add fake upstream SMTP tests for `EHLO`, `STARTTLS`, `AUTH PLAIN`, `AUTH LOGIN`, bad local auth, upstream XOAUTH2, and raw relay after auth.
-- [ ] 7.2 Implement local SMTP listener with STARTTLS and auth commands.
-- [ ] 7.3 Implement upstream `smtp.gmail.com:587` STARTTLS and XOAUTH2 authenticate.
-- [ ] 7.4 Implement bidirectional relay and connection cleanup.
-- [ ] 7.5 Run SMTP tests.
+- [x] 7.1 Add fake upstream SMTP tests for `EHLO`, `STARTTLS`, `AUTH PLAIN`, `AUTH LOGIN`, bad local auth, upstream XOAUTH2, and raw relay after auth.
+- [x] 7.2 Implement local SMTP listener with STARTTLS and auth commands.
+- [x] 7.3 Implement upstream `smtp.gmail.com:587` STARTTLS and XOAUTH2 authenticate.
+- [x] 7.4 Implement bidirectional relay and connection cleanup.
+- [x] 7.5 Run SMTP tests.
 
 ## 8. Lifecycle And Docs
 

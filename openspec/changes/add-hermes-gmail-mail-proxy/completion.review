@@ -40,6 +40,15 @@ Verification:
 Verification:
 - `/usr/local/bin/go test ./internal/mailproxy`
 
+## Slice 7: SMTP Proxy
+
+- Added local SMTP session handler with `EHLO`/`HELO`, `STARTTLS`, `AUTH PLAIN`, `AUTH LOGIN`, and pre-auth utility commands.
+- Added upstream SMTP STARTTLS and XOAUTH2 authentication helper.
+- Reused bidirectional relay after successful local and upstream auth.
+
+Verification:
+- `/usr/local/bin/go test ./internal/mailproxy`
+
 ## Slice 6: IMAP Proxy
 
 - Added IMAP implicit TLS session handler with pre-auth parser for `CAPABILITY`, `NOOP`, `LOGIN`, `LOGOUT`, malformed commands, and unsupported commands.
