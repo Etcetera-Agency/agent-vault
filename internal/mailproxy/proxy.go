@@ -16,6 +16,9 @@ type Proxy struct {
 	TLSConfig     *tls.Config
 	Authenticator *LocalAuthenticator
 	TokenProvider TokenProvider
+
+	mu     sync.Mutex
+	active map[net.Conn]struct{}
 }
 
 type MailProxyPolicy struct {
@@ -74,7 +77,40 @@ func (p *Proxy) Run(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-time.After(timeout):
+		p.closeActive()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
 		return fmt.Errorf("mail proxy shutdown timeout")
+	}
+}
+
+func (p *Proxy) track(conn net.Conn) func() {
+	p.mu.Lock()
+	if p.active == nil {
+		p.active = map[net.Conn]struct{}{}
+	}
+	p.active[conn] = struct{}{}
+	p.mu.Unlock()
+
+	return func() {
+		p.mu.Lock()
+		delete(p.active, conn)
+		p.mu.Unlock()
+	}
+}
+
+func (p *Proxy) closeActive() {
+	p.mu.Lock()
+	conns := make([]net.Conn, 0, len(p.active))
+	for conn := range p.active {
+		conns = append(conns, conn)
+	}
+	p.mu.Unlock()
+
+	for _, conn := range conns {
+		_ = conn.Close()
 	}
 }
 
@@ -89,9 +125,11 @@ func (p *Proxy) acceptIMAP(ctx context.Context, listener net.Listener, wg *sync.
 			errCh <- err
 			return
 		}
+		done := p.track(conn)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer done()
 			_ = HandleIMAPSession(ctx, conn, IMAPOptions{
 				TLSConfig:     p.TLSConfig,
 				Authenticator: p.Authenticator,
@@ -116,9 +154,11 @@ func (p *Proxy) acceptSMTP(ctx context.Context, listener net.Listener, wg *sync.
 			errCh <- err
 			return
 		}
+		done := p.track(conn)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer done()
 			_ = HandleSMTPSession(ctx, conn, SMTPOptions{
 				TLSConfig:     p.TLSConfig,
 				Authenticator: p.Authenticator,

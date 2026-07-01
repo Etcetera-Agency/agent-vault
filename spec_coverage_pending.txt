@@ -1,6 +1,9 @@
-add-hermes-gmail-mail-proxy pending coverage
+fix-mail-proxy-review-gaps pending coverage
 
 Completed:
+- Controlled shutdown review gap:
+  - active IMAP sessions are tracked and closed after shutdown timeout
+  - active SMTP sessions are tracked and closed after shutdown timeout
 - Shared OAuth access token resolver:
   - valid token returned without refresh
   - five-minute-buffer refresh
@@ -55,4 +58,6 @@ Completed:
   - Hermes Gmail guide with scope, credentials, CA trust, and env setup
 
 Pending:
-- None for `add-hermes-gmail-mail-proxy`; change archived on 2026-07-01.
+- SMTP upstream STARTTLS must derive TLS ServerName from configured upstream host.
+- Existing service `mail_proxy` policy must be mutable by CLI without dropping unrelated service fields.
+- Hygiene/docs cleanup must remove concept patch trailing whitespace and document the CLI toggle command.
