@@ -231,13 +231,14 @@ AND egress enforcement applies no limits to it.
 ### Requirement: Usage And Exhaustion Visible In UI
 The system SHALL surface current per-account daily and monthly usage and
 exhaustion or cooldown state for services with quota or account-pool config in
-the management UI. Usage and state SHALL be keyed by service account id and SHALL
-never display credential values.
+the management UI. For account-only services, the system SHALL show account
+state and usage counters without caps. The system SHALL never display credential
+values.
 
 #### Scenario: Show Usage Against Cap
-GIVEN service `apify` has account `acct1` with configured caps
+GIVEN service `apify` has accounts with configured caps
 WHEN an operator views `apify` in the UI
-THEN the UI shows `acct1` current daily and monthly usage against its cap.
+THEN the UI shows each account's current daily and monthly usage against its cap.
 
 #### Scenario: Show Exhausted Account
 GIVEN account `acct1` is at its daily cap or in cooldown
@@ -245,11 +246,19 @@ WHEN an operator views `apify` in the UI
 THEN the UI marks `acct1` as exhausted or cooling
 AND indicates when it becomes available again.
 
-#### Scenario: Credential Key Not Used As Account Label
-GIVEN account `acct1` uses `credential_key: APIFY_TOKEN_PRIMARY`
-WHEN an operator views quota usage
-THEN the row identity is `acct1`
-AND the UI does not treat `APIFY_TOKEN_PRIMARY` as the quota account identity.
+#### Scenario: Show Account-Only Pool State
+GIVEN service `apify` has accounts `acct1` and `acct2`
+AND has no `quota`
+WHEN an operator views the Services table
+THEN the quota column shows account rows and their current state
+AND does not show only a generic configured label.
+
+#### Scenario: Blank Quota With Accounts Remains Valid
+GIVEN an operator adds two accounts in the UI
+AND leaves all quota fields blank
+WHEN the operator saves the service
+THEN the service persists with account-only rotation
+AND the UI shows account state for the service after reload.
 
 ### Requirement: Credential Pool Eligibility
 The system SHALL treat credential account pooling as an explicit credential-level

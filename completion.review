@@ -35,6 +35,14 @@ add-account-only-rotation progress
   instead of generic configured text.
 - Docs and coverage updated for account-only rotation.
 
+fix-quota-ui-account-usage progress
+
+- Account-only usage responses now include account rows, counters, state, and
+  cooling availability without credential values.
+- Services table receives account rows for account-only configs, avoiding the
+  previous generic configured fallback.
+- Coverage updated for API/UI usage visibility.
+
 Verification:
 - `/usr/local/bin/go test ./internal/mailproxy`
 - `/usr/local/bin/go test ./cmd ./internal/server ./internal/broker`
@@ -53,3 +61,6 @@ Verification:
 - `go test ./internal/egressquota ./internal/brokercore ./internal/mitm ./internal/server`
 - `npm run build --prefix web`
 - `openspec validate add-account-only-rotation --strict`
+- `go test ./internal/server`
+- `npm run build --prefix web`
+- `openspec validate fix-quota-ui-account-usage --strict`

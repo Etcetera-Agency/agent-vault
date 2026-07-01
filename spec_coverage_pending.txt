@@ -157,6 +157,19 @@ Completed:
 Pending:
 - None for `add-account-only-rotation`; ready to archive.
 
+fix-quota-ui-account-usage coverage
+
+Completed:
+- Usage API includes services with quota or account-pool config.
+- Account-only usage rows include account id, credential key reference, daily/monthly usage, state, and `available_at` while cooling.
+- Account-only rows omit daily/monthly caps when no caps are configured.
+- API response tests assert no credential values leak.
+- Services table already renders usage account rows when returned, so account-only services no longer fall back to generic `Configured`.
+- Editor continues allowing blank quota with accounts through account-only rotation support.
+
+Pending:
+- None for `fix-quota-ui-account-usage`; ready to archive.
+
 add-quota-ui coverage
 
 Completed:

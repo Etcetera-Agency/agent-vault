@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Infisical/agent-vault/internal/auth"
+	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/crypto"
 	"github.com/Infisical/agent-vault/internal/egressquota"
@@ -6109,6 +6110,21 @@ func TestServicesQuotaUsageIncludesAccountOnlyServices(t *testing.T) {
 	srv.egressQuota.Seed([]egressquota.Snapshot{
 		{VaultID: "root-ns-id", MatchedService: "apify", AccountID: "acct1", CredentialKeys: []string{"APIFY_TOKEN_1"}, CreatedAt: now, Status: http.StatusOK},
 	})
+	coolingReservation, denial := srv.egressQuota.Reserve(context.Background(), "root-ns-id", broker.Service{
+		Name:                "apify",
+		Auth:                broker.Auth{Type: "bearer", Token: "APIFY_TOKEN_1"},
+		Rotation:            "round_robin",
+		AccountPoolProvider: "apify",
+		Accounts: []broker.ServiceAccount{
+			{ID: "acct1", CredentialKey: "APIFY_TOKEN_1"},
+			{ID: "acct2", CredentialKey: "APIFY_TOKEN_2"},
+		},
+	})
+	if denial != nil {
+		t.Fatalf("reserve cooling account: %+v", denial)
+	}
+	coolingReservation.Cooldown(time.Minute)
+	coolingReservation.Release()
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/vaults/default/services/quota-usage", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -6125,12 +6141,13 @@ func TestServicesQuotaUsageIncludesAccountOnlyServices(t *testing.T) {
 		Services []struct {
 			Name     string `json:"name"`
 			Accounts []struct {
-				ID          string `json:"id"`
-				DailyUsed   int    `json:"daily_used"`
-				DailyCap    *int   `json:"daily_cap,omitempty"`
-				MonthlyUsed int    `json:"monthly_used"`
-				MonthlyCap  *int   `json:"monthly_cap,omitempty"`
-				State       string `json:"state"`
+				ID          string     `json:"id"`
+				DailyUsed   int        `json:"daily_used"`
+				DailyCap    *int       `json:"daily_cap,omitempty"`
+				MonthlyUsed int        `json:"monthly_used"`
+				MonthlyCap  *int       `json:"monthly_cap,omitempty"`
+				State       string     `json:"state"`
+				AvailableAt *time.Time `json:"available_at,omitempty"`
 			} `json:"accounts"`
 		} `json:"services"`
 	}
@@ -6141,7 +6158,7 @@ func TestServicesQuotaUsageIncludesAccountOnlyServices(t *testing.T) {
 		t.Fatalf("unexpected usage response: %+v", resp.Services)
 	}
 	first := resp.Services[0].Accounts[0]
-	if first.ID != "acct1" || first.DailyUsed != 1 || first.MonthlyUsed != 1 || first.DailyCap != nil || first.MonthlyCap != nil || first.State != "available" {
+	if first.ID != "acct1" || first.DailyUsed != 1 || first.MonthlyUsed != 1 || first.DailyCap != nil || first.MonthlyCap != nil || first.State != "cooling" || first.AvailableAt == nil {
 		t.Fatalf("unexpected account-only usage: %+v", first)
 	}
 }
