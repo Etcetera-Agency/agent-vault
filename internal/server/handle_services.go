@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/catalog"
@@ -396,6 +397,91 @@ func (s *Server) handleServicesCredentialUsage(w http.ResponseWriter, r *http.Re
 		refs = []serviceRef{}
 	}
 	jsonOK(w, map[string]interface{}{"services": refs})
+}
+
+func (s *Server) handleServicesQuotaUsage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	name := r.PathValue("name")
+
+	ns, err := s.store.GetVault(ctx, name)
+	if err != nil || ns == nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("Vault %q not found", name))
+		return
+	}
+
+	if _, err := s.requireVaultAccess(w, r, ns.ID); err != nil {
+		return
+	}
+
+	services, err := s.loadServices(ctx, ns.ID)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Failed to parse services")
+		return
+	}
+
+	type accountUsage struct {
+		ID            string     `json:"id"`
+		CredentialKey string     `json:"credential_key"`
+		DailyUsed     int        `json:"daily_used"`
+		DailyCap      *int       `json:"daily_cap,omitempty"`
+		MonthlyUsed   int        `json:"monthly_used"`
+		MonthlyCap    *int       `json:"monthly_cap,omitempty"`
+		State         string     `json:"state"`
+		AvailableAt   *time.Time `json:"available_at,omitempty"`
+	}
+	type serviceUsage struct {
+		Name     string         `json:"name"`
+		Accounts []accountUsage `json:"accounts"`
+	}
+	out := []serviceUsage{}
+	now := time.Now()
+	for _, svc := range services {
+		if svc.Quota == nil {
+			continue
+		}
+		// AICODE-NOTE: Quota usage is a read-only UI surface; return credential keys and counters only, never decrypted credential values.
+		accounts := svc.Accounts
+		if len(accounts) == 0 {
+			keys := svc.Auth.CredentialKeys()
+			key := ""
+			if len(keys) > 0 {
+				key = keys[0]
+			}
+			accounts = []broker.ServiceAccount{{ID: "default", CredentialKey: key}}
+		}
+		entry := serviceUsage{Name: svc.Name}
+		for _, acct := range accounts {
+			dailyCap := svc.Quota.DailyCap
+			monthlyCap := svc.Quota.MonthlyCap
+			if acct.DailyCap != nil {
+				dailyCap = acct.DailyCap
+			}
+			if acct.MonthlyCap != nil {
+				monthlyCap = acct.MonthlyCap
+			}
+			day, month, coolingUntil := s.egressQuota.Usage(ns.ID, svc.Name, acct.CredentialKey)
+			state := "available"
+			var availableAt *time.Time
+			if coolingUntil.After(now) {
+				state = "cooling"
+				availableAt = &coolingUntil
+			} else if (dailyCap != nil && day >= *dailyCap) || (monthlyCap != nil && month >= *monthlyCap) {
+				state = "exhausted"
+			}
+			entry.Accounts = append(entry.Accounts, accountUsage{
+				ID:            acct.ID,
+				CredentialKey: acct.CredentialKey,
+				DailyUsed:     day,
+				DailyCap:      dailyCap,
+				MonthlyUsed:   month,
+				MonthlyCap:    monthlyCap,
+				State:         state,
+				AvailableAt:   availableAt,
+			})
+		}
+		out = append(out, entry)
+	}
+	jsonOK(w, map[string]interface{}{"services": out})
 }
 
 func (s *Server) handleServicesUpsert(w http.ResponseWriter, r *http.Request) {

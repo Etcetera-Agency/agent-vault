@@ -217,6 +217,15 @@ func (r *Registry) Snapshot(vaultID, service string, credentialKeys []string) (d
 	return state.dayCount, state.monthCount
 }
 
+func (r *Registry) Usage(vaultID, service, account string) (dayCount, monthCount int, coolingUntil time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := quotaKey(vaultID, service, account)
+	counter := r.counterForLocked(key, r.now())
+	limit := r.limitForLocked(key)
+	return counter.dayCount, counter.monthCount, limit.cooldownUntil
+}
+
 func (r *Registry) counterForLocked(key string, now time.Time) *counterState {
 	dayKey, monthKey := windowKeys(now)
 	state := r.counters[key]

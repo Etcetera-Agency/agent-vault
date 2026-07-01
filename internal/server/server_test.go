@@ -20,6 +20,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/auth"
 	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/crypto"
+	"github.com/Infisical/agent-vault/internal/egressquota"
 	"github.com/Infisical/agent-vault/internal/infisical"
 	"github.com/Infisical/agent-vault/internal/notify"
 	"github.com/Infisical/agent-vault/internal/store"
@@ -6011,6 +6012,69 @@ func TestServicesUpsertRoundTripsQuotaConfig(t *testing.T) {
 	}
 	if strings.Contains(getRec.Body.String(), "secret") {
 		t.Fatalf("response leaked credential value: %s", getRec.Body.String())
+	}
+}
+
+func TestServicesQuotaUsageReturnsAccountUsageWithoutCredentialValues(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	ms.credentials["root-ns-id:APIFY_TOKEN_1"] = &store.Credential{
+		ID: "c1", VaultID: "root-ns-id", Key: "APIFY_TOKEN_1", Ciphertext: []byte("secret-token-one"),
+	}
+	ms.credentials["root-ns-id:APIFY_TOKEN_2"] = &store.Credential{
+		ID: "c2", VaultID: "root-ns-id", Key: "APIFY_TOKEN_2", Ciphertext: []byte("secret-token-two"),
+	}
+	ms.brokerConfigs["root-ns-id"] = &store.BrokerConfig{
+		ID:           "bc-1",
+		VaultID:      "root-ns-id",
+		ServicesJSON: `[{"name":"apify","host":"api.apify.com","auth":{"type":"bearer","token":"APIFY_TOKEN_1"},"quota":{"daily_cap":2,"monthly_cap":10},"accounts":[{"id":"acct1","credential_key":"APIFY_TOKEN_1"},{"id":"acct2","credential_key":"APIFY_TOKEN_2","daily_cap":1}]}]`,
+	}
+	srv := newTestServer(withStore(ms))
+	now := time.Now()
+	srv.egressQuota.Seed([]egressquota.Snapshot{
+		{VaultID: "root-ns-id", MatchedService: "apify", CredentialKeys: []string{"APIFY_TOKEN_1"}, CreatedAt: now, Status: http.StatusOK},
+		{VaultID: "root-ns-id", MatchedService: "apify", CredentialKeys: []string{"APIFY_TOKEN_2"}, CreatedAt: now, Status: http.StatusOK},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/vaults/default/services/quota-usage", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "secret-token") {
+		t.Fatalf("response leaked credential value: %s", rec.Body.String())
+	}
+	var resp struct {
+		Services []struct {
+			Name     string `json:"name"`
+			Accounts []struct {
+				ID            string `json:"id"`
+				CredentialKey string `json:"credential_key"`
+				DailyUsed     int    `json:"daily_used"`
+				DailyCap      int    `json:"daily_cap,omitempty"`
+				MonthlyUsed   int    `json:"monthly_used"`
+				MonthlyCap    int    `json:"monthly_cap,omitempty"`
+				State         string `json:"state"`
+			} `json:"accounts"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode quota usage: %v", err)
+	}
+	if len(resp.Services) != 1 || resp.Services[0].Name != "apify" {
+		t.Fatalf("unexpected services response: %+v", resp.Services)
+	}
+	if len(resp.Services[0].Accounts) != 2 {
+		t.Fatalf("expected two accounts, got %+v", resp.Services[0].Accounts)
+	}
+	first, second := resp.Services[0].Accounts[0], resp.Services[0].Accounts[1]
+	if first.ID != "acct1" || first.CredentialKey != "APIFY_TOKEN_1" || first.DailyUsed != 1 || first.DailyCap != 2 || first.MonthlyCap != 10 || first.State != "available" {
+		t.Fatalf("unexpected first account usage: %+v", first)
+	}
+	if second.ID != "acct2" || second.CredentialKey != "APIFY_TOKEN_2" || second.DailyUsed != 1 || second.DailyCap != 1 || second.State != "exhausted" {
+		t.Fatalf("unexpected second account usage: %+v", second)
 	}
 }
 

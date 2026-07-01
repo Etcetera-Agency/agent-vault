@@ -32,9 +32,52 @@ interface Service {
   auth: Auth;
   substitutions?: Substitution[];
   mail_proxy?: MailProxyPolicy;
+  quota?: ServiceQuota;
+  accounts?: ServiceAccount[];
+  rotation?: "least_used" | "round_robin";
 }
 
 type SubstitutionSurface = (typeof SUBSTITUTION_SURFACES)[number];
+
+interface ServiceQuota {
+  daily_cap?: number;
+  monthly_cap?: number;
+  rpm?: number;
+  concurrency?: number;
+}
+
+interface ServiceAccount {
+  id: string;
+  credential_key: string;
+  daily_cap?: number;
+  monthly_cap?: number;
+  rpm?: number;
+}
+
+type AccountRow = {
+  _id: number;
+  id: string;
+  credential_key: string;
+  daily_cap_text: string;
+  monthly_cap_text: string;
+  rpm_text: string;
+};
+
+interface QuotaUsageAccount {
+  id: string;
+  credential_key: string;
+  daily_used: number;
+  daily_cap?: number;
+  monthly_used: number;
+  monthly_cap?: number;
+  state: "available" | "exhausted" | "cooling";
+  available_at?: string;
+}
+
+interface QuotaUsageService {
+  name: string;
+  accounts: QuotaUsageAccount[];
+}
 
 interface MailProxyPolicy {
   email?: string;
@@ -83,6 +126,9 @@ function credentialKeysForService(service: Service): string[] {
   if (service.mail_proxy?.local_password_credential) {
     keys.add(service.mail_proxy.local_password_credential);
   }
+  for (const account of service.accounts ?? []) {
+    if (account.credential_key) keys.add(account.credential_key);
+  }
   return [...keys];
 }
 
@@ -109,6 +155,18 @@ function slugifyHost(host: string): string {
   return slug;
 }
 
+function optionalNumber(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function isOptionalNumber(value: string): boolean {
+  const trimmed = value.trim();
+  return trimmed === "" || Number.isFinite(Number(trimmed));
+}
+
 export default function ServicesTab() {
   const { vaultName, vaultRole } = useVaultParams();
   const { preset: presetParam } = useSearch({ strict: false }) as { preset?: string };
@@ -117,6 +175,7 @@ export default function ServicesTab() {
   const [error, setError] = useState("");
   const [catalog, setCatalog] = useState<CatalogTemplate[]>([]);
   const [credentialKeys, setCredentialKeys] = useState<string[]>([]);
+  const [quotaUsage, setQuotaUsage] = useState<Record<string, QuotaUsageService>>({});
   const presetApplied = useRef(false);
 
   // Add/Edit modal state: null = closed, -1 = add, 0+ = edit index
@@ -140,6 +199,7 @@ export default function ServicesTab() {
     fetchServices();
     fetchCatalog();
     fetchCredentialKeys();
+    fetchQuotaUsage();
     fetchDiscoveredHosts();
   }, []);
 
@@ -194,6 +254,17 @@ export default function ServicesTab() {
     }
   }
 
+  async function fetchQuotaUsage() {
+    try {
+      const data = await apiRequest<{ services: QuotaUsageService[] }>(
+        `/v1/vaults/${encodeURIComponent(vaultName)}/services/quota-usage`
+      );
+      setQuotaUsage(Object.fromEntries((data.services ?? []).map((svc) => [svc.name, svc])));
+    } catch {
+      setQuotaUsage({});
+    }
+  }
+
   async function fetchDiscoveredHosts(limit = 5) {
     try {
       const resp = await apiFetch(
@@ -224,6 +295,7 @@ export default function ServicesTab() {
     // Re-fetch so the local copy always reflects exactly what the
     // server stored (e.g. inline-host re-joining for the read surface).
     await fetchServices();
+    await fetchQuotaUsage();
     fetchDiscoveredHosts(discoveredExpanded ? 100 : 5);
   }
 
@@ -337,6 +409,39 @@ export default function ServicesTab() {
           ))}
         </div>
       ),
+    },
+    {
+      key: "quota",
+      header: "Quota",
+      render: (service) => {
+        const usage = quotaUsage[service.name];
+        if (!service.quota && !service.accounts?.length) {
+          return <span className="text-sm text-text-dim">Unlimited</span>;
+        }
+        return (
+          <div className="space-y-1">
+            {(usage?.accounts ?? []).slice(0, 2).map((account) => (
+              <div key={account.id || account.credential_key} className="text-xs text-text-muted">
+                <span className="font-mono text-text">{account.id || "default"}</span>{" "}
+                <span className={account.state === "available" ? "text-success" : account.state === "cooling" ? "text-warning" : "text-danger"}>
+                  {account.state}
+                </span>
+                {(account.daily_cap || account.monthly_cap) && (
+                  <span className="ml-1">
+                    {account.daily_cap ? `${account.daily_used}/${account.daily_cap}d` : ""}
+                    {account.daily_cap && account.monthly_cap ? " · " : ""}
+                    {account.monthly_cap ? `${account.monthly_used}/${account.monthly_cap}m` : ""}
+                  </span>
+                )}
+              </div>
+            ))}
+            {usage && usage.accounts.length > 2 && (
+              <div className="text-xs text-text-dim">+{usage.accounts.length - 2} accounts</div>
+            )}
+            {!usage && <div className="text-xs text-text-muted">Configured</div>}
+          </div>
+        );
+      },
     },
     {
       key: "enabled",
@@ -588,6 +693,22 @@ function ServiceModal({
   const rowIdSeq = useRef(0);
   const nextRowId = () => ++rowIdSeq.current;
 
+  const [quotaDaily, setQuotaDaily] = useState(initial?.quota?.daily_cap?.toString() ?? "");
+  const [quotaMonthly, setQuotaMonthly] = useState(initial?.quota?.monthly_cap?.toString() ?? "");
+  const [quotaRPM, setQuotaRPM] = useState(initial?.quota?.rpm?.toString() ?? "");
+  const [quotaConcurrency, setQuotaConcurrency] = useState(initial?.quota?.concurrency?.toString() ?? "");
+  const [rotation, setRotation] = useState<"least_used" | "round_robin">(initial?.rotation ?? "least_used");
+  const [accounts, setAccounts] = useState<AccountRow[]>(() =>
+    (initial?.accounts ?? []).map((account) => ({
+      _id: nextRowId(),
+      id: account.id,
+      credential_key: account.credential_key,
+      daily_cap_text: account.daily_cap?.toString() ?? "",
+      monthly_cap_text: account.monthly_cap?.toString() ?? "",
+      rpm_text: account.rpm?.toString() ?? "",
+    }))
+  );
+
   // Custom header fields (multiple). _id is local-only — stripped before
   // submitting; never round-tripped to the server.
   type HeaderRow = { _id: number; name: string; value: string };
@@ -630,6 +751,12 @@ function ServiceModal({
     setApiKey("");
     setApiKeyHeader("");
     setApiKeyPrefix("");
+    setQuotaDaily("");
+    setQuotaMonthly("");
+    setQuotaRPM("");
+    setQuotaConcurrency("");
+    setRotation("least_used");
+    setAccounts([]);
     setCustomHeaders([{ _id: nextRowId(), name: "", value: "" }]);
     setSubs([]);
   }
@@ -663,10 +790,73 @@ function ServiceModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [subsExpanded, setSubsExpanded] = useState(subs.length > 0);
+  const [quotaExpanded, setQuotaExpanded] = useState(
+    !!initial?.quota || (initial?.accounts?.length ?? 0) > 0
+  );
+
+  const quotaValues: ServiceQuota = {
+    daily_cap: optionalNumber(quotaDaily),
+    monthly_cap: optionalNumber(quotaMonthly),
+    rpm: optionalNumber(quotaRPM),
+    concurrency: optionalNumber(quotaConcurrency),
+  };
+  const hasQuota = Object.values(quotaValues).some((value) => value !== undefined);
+  const cleanedAccounts: ServiceAccount[] = accounts
+    .map((account) => ({
+      id: account.id.trim(),
+      credential_key: account.credential_key.trim(),
+      daily_cap: optionalNumber(account.daily_cap_text),
+      monthly_cap: optionalNumber(account.monthly_cap_text),
+      rpm: optionalNumber(account.rpm_text),
+    }))
+    .filter((account) => account.id !== "" || account.credential_key !== "");
+  const accountsValid = cleanedAccounts.every(
+    (account) => account.id !== "" && account.credential_key !== ""
+  );
+  const quotaInputsValid = [
+    quotaDaily,
+    quotaMonthly,
+    quotaRPM,
+    quotaConcurrency,
+  ].every(isOptionalNumber);
+  const accountInputsValid = accounts.every((account) =>
+    [
+      account.daily_cap_text,
+      account.monthly_cap_text,
+      account.rpm_text,
+    ].every(isOptionalNumber)
+  );
+  const quotaNumbersValid =
+    quotaInputsValid &&
+    [...Object.values(quotaValues)].every(
+      (value) => value === undefined || value >= 0
+    );
+  const accountNumbersValid = cleanedAccounts.every((account) =>
+    [account.daily_cap, account.monthly_cap, account.rpm].every(
+      (value) => value === undefined || value >= 0
+    )
+  );
+  const quotaRangesValid =
+    quotaValues.daily_cap === undefined ||
+    quotaValues.monthly_cap === undefined ||
+    quotaValues.monthly_cap >= quotaValues.daily_cap;
+  const accountRangesValid = cleanedAccounts.every(
+    (account) =>
+      account.daily_cap === undefined ||
+      account.monthly_cap === undefined ||
+      account.monthly_cap >= account.daily_cap
+  );
+  const quotaValid =
+    quotaNumbersValid &&
+    accountInputsValid &&
+    accountNumbersValid &&
+    quotaRangesValid &&
+    accountRangesValid;
 
   const canSubmit = (() => {
     if (!name.trim()) return false;
     if (!pattern.trim()) return false;
+    if (!accountsValid || !quotaValid) return false;
     switch (authType) {
       case "bearer":
         return !!token.trim();
@@ -734,6 +924,9 @@ function ServiceModal({
         ...(enabled ? {} : { enabled: false }),
         methods: methods.length > 0 ? methods : ["*"],
         auth: buildAuth(),
+        ...(hasQuota && { quota: quotaValues }),
+        ...(cleanedAccounts.length > 0 && { accounts: cleanedAccounts }),
+        ...(cleanedAccounts.length > 0 && { rotation }),
         ...(cleanedSubs.length > 0 && { substitutions: cleanedSubs }),
         ...(initial?.mail_proxy && { mail_proxy: initial.mail_proxy }),
       };
@@ -1014,6 +1207,50 @@ function ServiceModal({
         </Section>
 
         <CollapsibleSection
+          title="Quotas and accounts"
+          badge="Optional"
+          summary={
+            hasQuota
+              ? "Limits configured"
+              : accounts.length > 0
+                ? `${accounts.length} account${accounts.length === 1 ? "" : "s"}`
+                : "Unlimited"
+          }
+          expanded={quotaExpanded}
+          onToggle={() => setQuotaExpanded((value) => !value)}
+        >
+          <QuotaEditor
+            quotaDaily={quotaDaily}
+            quotaMonthly={quotaMonthly}
+            quotaRPM={quotaRPM}
+            quotaConcurrency={quotaConcurrency}
+            rotation={rotation}
+            setQuotaDaily={setQuotaDaily}
+            setQuotaMonthly={setQuotaMonthly}
+            setQuotaRPM={setQuotaRPM}
+            setQuotaConcurrency={setQuotaConcurrency}
+            setRotation={setRotation}
+          />
+
+          <AccountPoolEditor
+            accounts={accounts}
+            setAccounts={setAccounts}
+            nextRowId={nextRowId}
+          />
+
+          {!quotaValid && (
+            <div className="text-xs text-danger">
+              Quota values must be non-negative and monthly caps must be at least daily caps.
+            </div>
+          )}
+          {!accountsValid && (
+            <div className="text-xs text-danger">
+              Account rows need both an id and a credential key.
+            </div>
+          )}
+        </CollapsibleSection>
+
+        <CollapsibleSection
           title="URL substitutions"
           badge="Optional"
           summary={
@@ -1119,6 +1356,204 @@ function ServiceModal({
         {error && <ErrorBanner message={error} />}
       </div>
     </Sheet>
+  );
+}
+
+function QuotaEditor({
+  quotaDaily,
+  quotaMonthly,
+  quotaRPM,
+  quotaConcurrency,
+  rotation,
+  setQuotaDaily,
+  setQuotaMonthly,
+  setQuotaRPM,
+  setQuotaConcurrency,
+  setRotation,
+}: {
+  quotaDaily: string;
+  quotaMonthly: string;
+  quotaRPM: string;
+  quotaConcurrency: string;
+  rotation: "least_used" | "round_robin";
+  setQuotaDaily: (value: string) => void;
+  setQuotaMonthly: (value: string) => void;
+  setQuotaRPM: (value: string) => void;
+  setQuotaConcurrency: (value: string) => void;
+  setRotation: (value: "least_used" | "round_robin") => void;
+}) {
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-3">
+        <FormField
+          label="Daily Cap"
+          tooltip="Maximum successful forwarded requests per day. Blank means unset."
+        >
+          <Input
+            type="number"
+            min="0"
+            placeholder="Unset"
+            value={quotaDaily}
+            onChange={(event) => setQuotaDaily(event.target.value)}
+          />
+        </FormField>
+        <FormField
+          label="Monthly Cap"
+          tooltip="Maximum successful forwarded requests per month. Blank means unset."
+        >
+          <Input
+            type="number"
+            min="0"
+            placeholder="Unset"
+            value={quotaMonthly}
+            onChange={(event) => setQuotaMonthly(event.target.value)}
+          />
+        </FormField>
+        <FormField
+          label="RPM"
+          tooltip="Maximum new reservations per minute. Blank means unset."
+        >
+          <Input
+            type="number"
+            min="0"
+            placeholder="Unset"
+            value={quotaRPM}
+            onChange={(event) => setQuotaRPM(event.target.value)}
+          />
+        </FormField>
+        <FormField
+          label="Concurrency"
+          tooltip="Maximum in-flight forwarded requests. Blank means unset."
+        >
+          <Input
+            type="number"
+            min="0"
+            placeholder="Unset"
+            value={quotaConcurrency}
+            onChange={(event) => setQuotaConcurrency(event.target.value)}
+          />
+        </FormField>
+      </div>
+
+      <FormField
+        label="Rotation"
+        tooltip="How the broker chooses between account credentials when several are available."
+      >
+        <SegmentedTabs
+          options={[
+            { value: "least_used", label: "Least used" },
+            { value: "round_robin", label: "Round robin" },
+          ]}
+          value={rotation}
+          onChange={setRotation}
+          ariaLabel="Rotation policy"
+        />
+      </FormField>
+    </>
+  );
+}
+
+function AccountPoolEditor({
+  accounts,
+  setAccounts,
+  nextRowId,
+}: {
+  accounts: AccountRow[];
+  setAccounts: React.Dispatch<React.SetStateAction<AccountRow[]>>;
+  nextRowId: () => number;
+}) {
+  const updateAccount = (index: number, patch: Partial<AccountRow>) => {
+    setAccounts((prev) =>
+      prev.map((row, rowIndex) =>
+        rowIndex === index ? { ...row, ...patch } : row
+      )
+    );
+  };
+
+  return (
+    <FormField
+      label="Account Pool"
+      tooltip="Credential keys only. Credential values stay hidden."
+    >
+      <div className="space-y-3">
+        {accounts.map((account, index) => (
+          <div
+            key={account._id}
+            className="rounded-lg border border-border bg-bg p-3 space-y-3"
+          >
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 items-center">
+              <Input
+                placeholder="Account id"
+                value={account.id}
+                onChange={(event) => updateAccount(index, { id: event.target.value })}
+              />
+              <Input
+                placeholder="Credential key"
+                list="service-credential-keys"
+                value={account.credential_key}
+                onChange={(event) =>
+                  updateAccount(index, { credential_key: event.target.value })
+                }
+              />
+              <IconButton
+                onClick={() =>
+                  setAccounts((prev) => prev.filter((_, rowIndex) => rowIndex !== index))
+                }
+                ariaLabel="Remove account"
+              />
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <Input
+                type="number"
+                min="0"
+                placeholder="Daily override"
+                value={account.daily_cap_text}
+                onChange={(event) =>
+                  updateAccount(index, { daily_cap_text: event.target.value })
+                }
+              />
+              <Input
+                type="number"
+                min="0"
+                placeholder="Monthly override"
+                value={account.monthly_cap_text}
+                onChange={(event) =>
+                  updateAccount(index, { monthly_cap_text: event.target.value })
+                }
+              />
+              <Input
+                type="number"
+                min="0"
+                placeholder="RPM override"
+                value={account.rpm_text}
+                onChange={(event) =>
+                  updateAccount(index, { rpm_text: event.target.value })
+                }
+              />
+            </div>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() =>
+            setAccounts((prev) => [
+              ...prev,
+              {
+                _id: nextRowId(),
+                id: "",
+                credential_key: "",
+                daily_cap_text: "",
+                monthly_cap_text: "",
+                rpm_text: "",
+              },
+            ])
+          }
+          className="text-sm font-medium text-primary hover:text-primary-hover transition-colors"
+        >
+          + Add account
+        </button>
+      </div>
+    </FormField>
   );
 }
 

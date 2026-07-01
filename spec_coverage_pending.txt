@@ -111,3 +111,16 @@ Completed:
 
 Pending:
 - UI editing and usage display remain in `add-quota-ui`.
+
+add-quota-ui coverage
+
+Completed:
+- Services UI preserves and edits optional `quota`, `accounts`, and `rotation` fields.
+- `QuotaEditor` supports daily/monthly/rpm/concurrency caps with blank values omitted.
+- `AccountPoolEditor` adds/removes account rows using credential keys only and supports per-account overrides.
+- Service table displays per-account daily/monthly usage and available/exhausted/cooling state.
+- `GET /v1/vaults/{name}/services/quota-usage` returns usage/caps/state without credential values.
+- Docs describe managing ceilings and reading usage in the Services tab.
+
+Pending:
+- None for `add-quota-ui`; change archived on 2026-07-01.

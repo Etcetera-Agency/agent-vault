@@ -98,6 +98,12 @@ retries with another available account. When every account is exhausted or
 cooling, Agent Vault emits one SMTP operator alert per service per day when SMTP
 notifications are configured.
 
+Vault admins can manage the same quota fields in the **Services** tab. The
+editor accepts blank quota fields as unset, uses credential key selectors for
+account pools, and never displays credential values. The service table shows
+daily/monthly usage against configured caps plus each account's available,
+exhausted, or cooling state.
+
 ## Auth types
 
 Every service must include an `auth` config that tells Agent Vault how to authenticate to the target host. The `auth` config references [credential](/learn/credentials) key names (not the actual credential values) stored in the vault.
