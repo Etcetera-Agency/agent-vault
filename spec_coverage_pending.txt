@@ -55,4 +55,4 @@ Completed:
   - Hermes Gmail guide with scope, credentials, CA trust, and env setup
 
 Pending:
-- OpenSpec archive after final validation.
+- None for `add-hermes-gmail-mail-proxy`; change archived on 2026-07-01.

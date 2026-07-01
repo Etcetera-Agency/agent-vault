@@ -66,5 +66,5 @@
 
 ## 9. Archive
 
-- [ ] 9.1 After implementation and approval, archive the OpenSpec change.
-- [ ] 9.2 Validate archived specs.
+- [x] 9.1 After implementation and approval, archive the OpenSpec change.
+- [x] 9.2 Validate archived specs.
