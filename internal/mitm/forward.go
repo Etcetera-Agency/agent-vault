@@ -245,6 +245,7 @@ func (p *Proxy) forwardRequest(
 		event.MatchedHost = inject.MatchedHost
 		event.MatchedPath = inject.MatchedPath
 		event.MatchedPort = inject.MatchedPort
+		event.AccountID = inject.AccountID
 		event.CredentialKeys = inject.CredentialKeys
 		event.Passthrough = inject.Passthrough
 	}
@@ -381,6 +382,7 @@ func (p *Proxy) forwardRequest(
 			if retryResp, retryRTErr := p.upstream.RoundTrip(retryReq); retryRTErr == nil {
 				_ = resp.Body.Close()
 				resp = retryResp
+				event.AccountID = retryInject.AccountID
 				event.CredentialKeys = retryInject.CredentialKeys
 				inject = retryInject
 				p.logger.Debug("egress quota 429 failover attempted",

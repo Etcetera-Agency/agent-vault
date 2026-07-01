@@ -559,6 +559,7 @@ func TestMITMForwardEmitsRequestLogRow(t *testing.T) {
 			MatchedName: "upstream-svc",
 			MatchedHost: upstreamHost,
 			MatchedPath: "/v1/*",
+			AccountID:   "acct1",
 			Headers:     map[string]string{"Authorization": "Bearer x"},
 		}},
 	}}
@@ -621,6 +622,9 @@ func TestMITMForwardEmitsRequestLogRow(t *testing.T) {
 	}
 	if row.MatchedPath != "/v1/*" {
 		t.Errorf("MatchedPath = %q, want /v1/*", row.MatchedPath)
+	}
+	if row.AccountID != "acct1" {
+		t.Errorf("AccountID = %q, want acct1", row.AccountID)
 	}
 }
 

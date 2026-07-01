@@ -316,6 +316,7 @@ type RequestLog struct {
 	Host           string
 	Path           string
 	MatchedService string
+	AccountID      string
 	CredentialKeys []string
 	Status         int
 	LatencyMs      int64

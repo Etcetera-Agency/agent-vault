@@ -102,8 +102,8 @@ func TestReserveDeniesConcurrencyUntilRelease(t *testing.T) {
 func TestReserveLeastUsedSelectsLowerUsageAccount(t *testing.T) {
 	reg := New()
 	reg.Seed([]Snapshot{
-		{VaultID: "vault-1", MatchedService: "apify", CredentialKeys: []string{"APIFY_TOKEN_1"}, CreatedAt: time.Now(), Status: http.StatusOK},
-		{VaultID: "vault-1", MatchedService: "apify", CredentialKeys: []string{"APIFY_TOKEN_1"}, CreatedAt: time.Now(), Status: http.StatusOK},
+		{VaultID: "vault-1", MatchedService: "apify", AccountID: "acct1", CredentialKeys: []string{"APIFY_TOKEN_1"}, CreatedAt: time.Now(), Status: http.StatusOK},
+		{VaultID: "vault-1", MatchedService: "apify", AccountID: "acct1", CredentialKeys: []string{"APIFY_TOKEN_1"}, CreatedAt: time.Now(), Status: http.StatusOK},
 	})
 	svc := quotaService(&broker.ServiceQuota{DailyCap: intPtr(10)})
 	svc.Rotation = "least_used"
@@ -116,8 +116,8 @@ func TestReserveLeastUsedSelectsLowerUsageAccount(t *testing.T) {
 	if denial != nil {
 		t.Fatalf("unexpected denial: %+v", denial)
 	}
-	if res.Account() != "APIFY_TOKEN_2" {
-		t.Fatalf("account = %q, want APIFY_TOKEN_2", res.Account())
+	if res.AccountID() != "acct2" || res.CredentialKey() != "APIFY_TOKEN_2" {
+		t.Fatalf("reservation = account %q credential %q, want acct2/APIFY_TOKEN_2", res.AccountID(), res.CredentialKey())
 	}
 	res.Release()
 }
@@ -141,8 +141,8 @@ func TestReserveRoundRobinAlternatesAccounts(t *testing.T) {
 		t.Fatalf("unexpected second denial: %+v", denial)
 	}
 	second.Release()
-	if first.Account() != "APIFY_TOKEN_1" || second.Account() != "APIFY_TOKEN_2" {
-		t.Fatalf("accounts = %q then %q, want APIFY_TOKEN_1 then APIFY_TOKEN_2", first.Account(), second.Account())
+	if first.AccountID() != "acct1" || second.AccountID() != "acct2" {
+		t.Fatalf("accounts = %q then %q, want acct1 then acct2", first.AccountID(), second.AccountID())
 	}
 }
 
@@ -168,8 +168,8 @@ func TestReserveSkipsCooldownAccount(t *testing.T) {
 	if denial != nil {
 		t.Fatalf("unexpected second denial: %+v", denial)
 	}
-	if second.Account() != "APIFY_TOKEN_2" {
-		t.Fatalf("account = %q, want APIFY_TOKEN_2", second.Account())
+	if second.AccountID() != "acct2" {
+		t.Fatalf("account = %q, want acct2", second.AccountID())
 	}
 	second.Release()
 }
@@ -220,5 +220,26 @@ func TestSeedFromRequestLogsReconstructsWindows(t *testing.T) {
 	day, month := reg.Snapshot("vault-1", "apify", []string{"APIFY_TOKEN"})
 	if day != 1 || month != 2 {
 		t.Fatalf("counts = day %d month %d, want 1/2", day, month)
+	}
+}
+
+func TestSeedFromRequestLogsUsesAccountIDWhenCredentialKeyDiffers(t *testing.T) {
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	reg := New()
+	reg.now = func() time.Time { return now }
+	err := reg.SeedFromRequestLogs(context.Background(), fakeLogStore{rows: []store.RequestLog{
+		{VaultID: "vault-1", MatchedService: "apify", AccountID: "acct1", CredentialKeys: []string{"APIFY_TOKEN_PRIMARY"}, CreatedAt: now, Status: http.StatusOK},
+	}}, 100)
+	if err != nil {
+		t.Fatalf("SeedFromRequestLogs: %v", err)
+	}
+
+	day, month, _ := reg.Usage("vault-1", "apify", "acct1")
+	if day != 1 || month != 1 {
+		t.Fatalf("account id counts = day %d month %d, want 1/1", day, month)
+	}
+	day, month, _ = reg.Usage("vault-1", "apify", "APIFY_TOKEN_PRIMARY")
+	if day != 0 || month != 0 {
+		t.Fatalf("credential key counts = day %d month %d, want 0/0", day, month)
 	}
 }

@@ -43,8 +43,6 @@ func utcTimePtr(t *time.Time) *time.Time {
 	return &u
 }
 
-
-
 // nullableString returns nil for empty strings, enabling SQL NULL inserts.
 func nullableString(s string) interface{} {
 	if s == "" {
@@ -3234,9 +3232,9 @@ func (s *SQLStore) InsertRequestLogs(ctx context.Context, rows []RequestLog) err
 	stmt, err := tx.PrepareContext(ctx, s.dialect.Rebind(`
 		INSERT INTO request_logs
 		  (vault_id, actor_type, actor_id, ingress, method, host, path,
-		   matched_service, credential_keys, status, latency_ms, error_code,
+		   matched_service, account_id, credential_keys, status, latency_ms, error_code,
 		   auth_scheme, auth_header, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`))
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`))
 	if err != nil {
 		return fmt.Errorf("preparing request_logs insert: %w", err)
 	}
@@ -3257,7 +3255,7 @@ func (s *SQLStore) InsertRequestLogs(ctx context.Context, rows []RequestLog) err
 		}
 		if _, err := stmt.ExecContext(ctx,
 			r.VaultID, r.ActorType, r.ActorID, r.Ingress, r.Method, r.Host, r.Path,
-			r.MatchedService, string(keysJSON), r.Status, r.LatencyMs, r.ErrorCode,
+			r.MatchedService, r.AccountID, string(keysJSON), r.Status, r.LatencyMs, r.ErrorCode,
 			r.AuthScheme, r.AuthHeader,
 			s.dialect.FormatTime(createdAt.UTC()),
 		); err != nil {
@@ -3317,7 +3315,7 @@ func (s *SQLStore) ListRequestLogs(ctx context.Context, opts ListRequestLogsOpts
 	}
 
 	query := `SELECT id, vault_id, actor_type, actor_id, ingress, method, host, path,
-	                 matched_service, credential_keys, status, latency_ms, error_code, created_at
+	                 matched_service, account_id, credential_keys, status, latency_ms, error_code, created_at
 	          FROM request_logs`
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ") // #nosec G202 -- where entries are static predicate strings; all user input flows through args as ? placeholders
@@ -3346,7 +3344,7 @@ func (s *SQLStore) ListRequestLogs(ctx context.Context, opts ListRequestLogsOpts
 		var createdAt interface{}
 		if err := rows.Scan(
 			&rl.ID, &rl.VaultID, &rl.ActorType, &rl.ActorID, &rl.Ingress,
-			&rl.Method, &rl.Host, &rl.Path, &rl.MatchedService, &keysJSON,
+			&rl.Method, &rl.Host, &rl.Path, &rl.MatchedService, &rl.AccountID, &keysJSON,
 			&rl.Status, &rl.LatencyMs, &rl.ErrorCode, &createdAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning request_log: %w", err)

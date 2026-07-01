@@ -49,17 +49,19 @@ type Decision struct {
 }
 
 type Reservation struct {
-	reg      *Registry
-	key      string
-	service  string
-	account  string
-	released bool
-	recorded bool
+	reg           *Registry
+	key           string
+	service       string
+	accountID     string
+	credentialKey string
+	released      bool
+	recorded      bool
 }
 
 type Snapshot struct {
 	VaultID        string
 	MatchedService string
+	AccountID      string
 	CredentialKeys []string
 	CreatedAt      time.Time
 	Status         int
@@ -115,6 +117,7 @@ func (r *Registry) loadFromRequestLogs(ctx context.Context, s requestLogStore, l
 		snapshots = append(snapshots, Snapshot{
 			VaultID:        row.VaultID,
 			MatchedService: row.MatchedService,
+			AccountID:      row.AccountID,
 			CredentialKeys: row.CredentialKeys,
 			CreatedAt:      row.CreatedAt,
 			Status:         row.Status,
@@ -138,7 +141,7 @@ func (r *Registry) Seed(rows []Snapshot) {
 		if row.MatchedService == "" || row.Status <= 0 || row.CreatedAt.IsZero() {
 			continue
 		}
-		key := quotaKey(row.VaultID, row.MatchedService, accountKey(row.CredentialKeys))
+		key := quotaKey(row.VaultID, row.MatchedService, snapshotAccountID(row))
 		state := r.counterForLocked(key, now)
 		rowDay, rowMonth := windowKeys(row.CreatedAt)
 		if rowDay == dayKey {
@@ -161,7 +164,7 @@ func (r *Registry) Reconcile(rows []Snapshot) {
 		if row.MatchedService == "" || row.Status <= 0 || row.CreatedAt.IsZero() {
 			continue
 		}
-		key := quotaKey(row.VaultID, row.MatchedService, accountKey(row.CredentialKeys))
+		key := quotaKey(row.VaultID, row.MatchedService, snapshotAccountID(row))
 		state := next[key]
 		if state == nil {
 			state = &counterState{dayKey: dayKey, monthKey: monthKey}
@@ -198,8 +201,14 @@ func (r *Registry) Reserve(ctx context.Context, vaultID string, svc broker.Servi
 	for _, candidate := range candidates {
 		denial := r.reserveCandidateLocked(now, svc, candidate)
 		if denial == nil {
-			r.recordRoundRobinLocked(vaultID, svc, candidate.account)
-			return &Reservation{reg: r, key: candidate.key, service: svc.Name, account: candidate.account}, nil
+			r.recordRoundRobinLocked(vaultID, svc, candidate.accountID)
+			return &Reservation{
+				reg:           r,
+				key:           candidate.key,
+				service:       svc.Name,
+				accountID:     candidate.accountID,
+				credentialKey: candidate.credentialKey,
+			}, nil
 		}
 		best = earlierDecision(best, denial)
 	}
@@ -254,9 +263,10 @@ func (r *Registry) limitForLocked(key string) *limitState {
 }
 
 type candidate struct {
-	key     string
-	account string
-	quota   broker.ServiceQuota
+	key           string
+	accountID     string
+	credentialKey string
+	quota         broker.ServiceQuota
 }
 
 func (r *Registry) orderedCandidatesLocked(vaultID string, svc broker.Service, now time.Time) []candidate {
@@ -268,7 +278,7 @@ func (r *Registry) orderedCandidatesLocked(vaultID string, svc broker.Service, n
 	candidates := make([]candidate, 0, capacity)
 	if len(svc.Accounts) == 0 {
 		account := accountKey(svc.Auth.CredentialKeys())
-		return []candidate{{key: quotaKey(vaultID, svc.Name, account), account: account, quota: base}}
+		return []candidate{{key: quotaKey(vaultID, svc.Name, account), accountID: account, credentialKey: account, quota: base}}
 	}
 	for _, acct := range svc.Accounts {
 		quota := base
@@ -281,10 +291,12 @@ func (r *Registry) orderedCandidatesLocked(vaultID string, svc broker.Service, n
 		if acct.RPM != nil {
 			quota.RPM = acct.RPM
 		}
+		// AICODE-NOTE: Quota state keys by service account id; credential_key is only the secret reference injected upstream.
 		candidates = append(candidates, candidate{
-			key:     quotaKey(vaultID, svc.Name, acct.CredentialKey),
-			account: acct.CredentialKey,
-			quota:   quota,
+			key:           quotaKey(vaultID, svc.Name, acct.ID),
+			accountID:     acct.ID,
+			credentialKey: acct.CredentialKey,
+			quota:         quota,
 		})
 	}
 	switch svc.Rotation {
@@ -336,7 +348,7 @@ func (r *Registry) recordRoundRobinLocked(vaultID string, svc broker.Service, ac
 		return
 	}
 	for i, acct := range svc.Accounts {
-		if acct.CredentialKey == account {
+		if acct.ID == account {
 			r.rrIndex[serviceKey(vaultID, svc.Name)] = (i + 1) % len(svc.Accounts)
 			return
 		}
@@ -378,11 +390,18 @@ func (res *Reservation) Commit(status int) {
 	res.recorded = true
 }
 
-func (res *Reservation) Account() string {
+func (res *Reservation) AccountID() string {
 	if res == nil {
 		return ""
 	}
-	return res.account
+	return res.accountID
+}
+
+func (res *Reservation) CredentialKey() string {
+	if res == nil {
+		return ""
+	}
+	return res.credentialKey
 }
 
 func (res *Reservation) Cooldown(d time.Duration) {
@@ -452,6 +471,13 @@ func accountKey(keys []string) string {
 		return implicitAccount
 	}
 	return keys[0]
+}
+
+func snapshotAccountID(row Snapshot) string {
+	if row.AccountID != "" {
+		return row.AccountID
+	}
+	return accountKey(row.CredentialKeys)
 }
 
 func quotaKey(vaultID, service, account string) string {

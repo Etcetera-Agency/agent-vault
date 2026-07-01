@@ -21,6 +21,7 @@ type logItem struct {
 	Host           string   `json:"host"`
 	Path           string   `json:"path"`
 	MatchedService string   `json:"matched_service"`
+	AccountID      string   `json:"account_id,omitempty"`
 	CredentialKeys []string `json:"credential_keys"`
 	Status         int      `json:"status"`
 	LatencyMs      int64    `json:"latency_ms"`
@@ -132,6 +133,7 @@ func (s *Server) handleVaultLogsList(w http.ResponseWriter, r *http.Request) {
 			Host:           r.Host,
 			Path:           r.Path,
 			MatchedService: r.MatchedService,
+			AccountID:      r.AccountID,
 			CredentialKeys: r.CredentialKeys,
 			Status:         r.Status,
 			LatencyMs:      r.LatencyMs,

@@ -112,6 +112,20 @@ Completed:
 Pending:
 - UI editing and usage display remain in `add-quota-ui`.
 
+fix-quota-account-identity coverage
+
+Completed:
+- Request logs carry non-secret `account_id` metadata for matched account-pool traffic.
+- Request-log store, list, migration, and migration-copy paths persist `account_id`.
+- Egress quota counters, cooldowns, rate/concurrency state, round-robin cursor decisions, and usage snapshots key account pools by `accounts[].id`.
+- Reservations expose separate account id and credential key; broker injection uses credential key while logs/usage receive account id.
+- Usage API returns rows keyed by account id and never credential values.
+- Tests cover `id != credential_key` for least-used, round-robin, cooldown, request-log seeding, usage response, and injection metadata.
+- Docs explain account id vs credential key semantics.
+
+Pending:
+- None for `fix-quota-account-identity`; ready to archive.
+
 add-quota-ui coverage
 
 Completed:

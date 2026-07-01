@@ -37,6 +37,7 @@ type ProxyEvent struct {
 	MatchedHost    string   // host pattern of the matched service (e.g. "*.github.com"), or "" if none
 	MatchedPath    string   // path pattern of the matched service, or "" if catch-all / none
 	MatchedPort    *int     // port of the matched service; nil if wildcard-port or no match
+	AccountID      string   // selected quota service account id; credential key remains separate
 	CredentialKeys []string // upper-snake credential key names only
 	Status         int      // upstream status; 0 if never dispatched
 	TotalMs        int64    // handler entry → emit, in milliseconds
@@ -71,6 +72,7 @@ func LogProxyEvent(logger *slog.Logger, e ProxyEvent) {
 		slog.String("matched_host", e.MatchedHost),
 		slog.String("matched_path", e.MatchedPath),
 		slog.Any("matched_port", e.MatchedPort),
+		slog.String("account_id", e.AccountID),
 		slog.Any("credential_keys", e.CredentialKeys),
 		slog.Int("status", e.Status),
 		slog.Int64("total_ms", e.TotalMs),

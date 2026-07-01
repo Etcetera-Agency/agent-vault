@@ -1065,7 +1065,7 @@ func copyRequestLogs(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect 
 
 	for {
 		rows, err := src.db.QueryContext(ctx,
-			fmt.Sprintf("SELECT id, vault_id, actor_type, actor_id, ingress, method, host, path, matched_service, credential_keys, status, latency_ms, error_code, created_at, auth_scheme, auth_header FROM request_logs ORDER BY id LIMIT %d OFFSET %d", batchSize, offset))
+			fmt.Sprintf("SELECT id, vault_id, actor_type, actor_id, ingress, method, host, path, matched_service, account_id, credential_keys, status, latency_ms, error_code, created_at, auth_scheme, auth_header FROM request_logs ORDER BY id LIMIT %d OFFSET %d", batchSize, offset))
 		if err != nil {
 			return total, err
 		}
@@ -1074,7 +1074,7 @@ func copyRequestLogs(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect 
 		for rows.Next() {
 			var id int
 			var vaultID, actorType, actorID, ingress, method, host, path string
-			var matchedService, credKeys string
+			var matchedService, accountID, credKeys string
 			var status, latencyMs int
 			var errorCode string
 			var createdAt interface{}
@@ -1082,7 +1082,7 @@ func copyRequestLogs(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect 
 
 			if err := rows.Scan(
 				&id, &vaultID, &actorType, &actorID, &ingress, &method, &host, &path,
-				&matchedService, &credKeys, &status, &latencyMs, &errorCode,
+				&matchedService, &accountID, &credKeys, &status, &latencyMs, &errorCode,
 				&createdAt, &authScheme, &authHeader,
 			); err != nil {
 				_ = rows.Close()
@@ -1098,11 +1098,11 @@ func copyRequestLogs(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect 
 			_, err = tx.ExecContext(ctx,
 				dstDialect.Rebind(`INSERT INTO request_logs
 					(id, vault_id, actor_type, actor_id, ingress, method, host, path,
-					 matched_service, credential_keys, status, latency_ms, error_code,
+					 matched_service, account_id, credential_keys, status, latency_ms, error_code,
 					 created_at, auth_scheme, auth_header)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 				id, vaultID, actorType, actorID, ingress, method, host, path,
-				matchedService, credKeys, status, latencyMs, errorCode,
+				matchedService, accountID, credKeys, status, latencyMs, errorCode,
 				ca, authScheme, authHeader,
 			)
 			if err != nil {

@@ -172,6 +172,9 @@ func TestInject_EgressQuotaSelectedAccountOverridesBearerToken(t *testing.T) {
 	if len(second.CredentialKeys) == 0 || second.CredentialKeys[0] != "APIFY_TOKEN_2" {
 		t.Fatalf("CredentialKeys = %v, want selected account first", second.CredentialKeys)
 	}
+	if second.AccountID != "acct2" {
+		t.Fatalf("AccountID = %q, want acct2", second.AccountID)
+	}
 }
 
 func TestInject_MethodPolicyAllowsListedMethod(t *testing.T) {

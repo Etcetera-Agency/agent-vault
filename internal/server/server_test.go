@@ -6031,8 +6031,8 @@ func TestServicesQuotaUsageReturnsAccountUsageWithoutCredentialValues(t *testing
 	srv := newTestServer(withStore(ms))
 	now := time.Now()
 	srv.egressQuota.Seed([]egressquota.Snapshot{
-		{VaultID: "root-ns-id", MatchedService: "apify", CredentialKeys: []string{"APIFY_TOKEN_1"}, CreatedAt: now, Status: http.StatusOK},
-		{VaultID: "root-ns-id", MatchedService: "apify", CredentialKeys: []string{"APIFY_TOKEN_2"}, CreatedAt: now, Status: http.StatusOK},
+		{VaultID: "root-ns-id", MatchedService: "apify", AccountID: "acct1", CredentialKeys: []string{"APIFY_TOKEN_1"}, CreatedAt: now, Status: http.StatusOK},
+		{VaultID: "root-ns-id", MatchedService: "apify", AccountID: "acct2", CredentialKeys: []string{"APIFY_TOKEN_2"}, CreatedAt: now, Status: http.StatusOK},
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/vaults/default/services/quota-usage", nil)

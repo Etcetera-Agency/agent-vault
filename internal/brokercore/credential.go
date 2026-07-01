@@ -51,6 +51,10 @@ type InjectResult struct {
 	// errors still carry diagnostic context. Safe to log.
 	CredentialKeys []string
 
+	// AccountID is the selected service account identity for quota
+	// state. Safe to log; never a credential value.
+	AccountID string
+
 	// Substitutions are resolved placeholder rewrites; each entry
 	// carries a SECRET Value — never log placeholder values.
 	Substitutions []ResolvedSubstitution
@@ -172,7 +176,8 @@ func (p *StoreCredentialProvider) Inject(ctx context.Context, vaultID, targetHos
 	)
 
 	var quotaReservation *egressquota.Reservation
-	selectedAccount := ""
+	selectedAccountID := ""
+	selectedCredentialKey := ""
 	if p.Quota != nil {
 		reservation, denial := p.Quota.Reserve(ctx, vaultID, *matched)
 		if denial != nil {
@@ -185,10 +190,11 @@ func (p *StoreCredentialProvider) Inject(ctx context.Context, vaultID, targetHos
 			}, &ErrEgressQuotaExceeded{Decision: denial}
 		}
 		quotaReservation = reservation
-		selectedAccount = reservation.Account()
-		if selectedAccount != "" {
+		selectedAccountID = reservation.AccountID()
+		selectedCredentialKey = reservation.CredentialKey()
+		if selectedCredentialKey != "" {
 			copySvc := *matched
-			copySvc.Auth = accountAuth(copySvc.Auth, selectedAccount)
+			copySvc.Auth = accountAuth(copySvc.Auth, selectedCredentialKey)
 			matched = &copySvc
 		}
 	}
@@ -243,7 +249,8 @@ func (p *StoreCredentialProvider) Inject(ctx context.Context, vaultID, targetHos
 		MatchedHost:      matched.Host,
 		MatchedPath:      matched.Path,
 		MatchedPort:      matched.Port,
-		CredentialKeys:   selectedCredentialKeys(matched.CredentialKeys(), selectedAccount),
+		CredentialKeys:   selectedCredentialKeys(matched.CredentialKeys(), selectedCredentialKey),
+		AccountID:        selectedAccountID,
 		QuotaReservation: quotaReservation,
 	}
 

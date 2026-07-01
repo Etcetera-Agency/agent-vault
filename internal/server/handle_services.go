@@ -459,7 +459,11 @@ func (s *Server) handleServicesQuotaUsage(w http.ResponseWriter, r *http.Request
 			if acct.MonthlyCap != nil {
 				monthlyCap = acct.MonthlyCap
 			}
-			day, month, coolingUntil := s.egressQuota.Usage(ns.ID, svc.Name, acct.CredentialKey)
+			accountID := acct.ID
+			if accountID == "" {
+				accountID = acct.CredentialKey
+			}
+			day, month, coolingUntil := s.egressQuota.Usage(ns.ID, svc.Name, accountID)
 			state := "available"
 			var availableAt *time.Time
 			if coolingUntil.After(now) {

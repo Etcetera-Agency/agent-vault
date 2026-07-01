@@ -30,6 +30,7 @@ type Record struct {
 	MatchedHost    string // host pattern; not persisted by the SQLite sink (no schema change).
 	MatchedPath    string // path pattern, or empty for catch-all; not persisted by the SQLite sink.
 	MatchedPort    *int   // not persisted by the SQLite sink (no schema change).
+	AccountID      string
 	CredentialKeys []string
 	Status         int
 	LatencyMs      int64
@@ -84,6 +85,7 @@ func FromEvent(ev brokercore.ProxyEvent, vaultID, actorType, actorID string) Rec
 		MatchedHost:    ev.MatchedHost,
 		MatchedPath:    ev.MatchedPath,
 		MatchedPort:    ev.MatchedPort,
+		AccountID:      ev.AccountID,
 		CredentialKeys: ev.CredentialKeys,
 		Status:         ev.Status,
 		LatencyMs:      ev.TotalMs,
@@ -106,6 +108,7 @@ func toStoreRow(r Record) store.RequestLog {
 		Host:           r.Host,
 		Path:           r.Path,
 		MatchedService: r.MatchedService,
+		AccountID:      r.AccountID,
 		CredentialKeys: r.CredentialKeys,
 		Status:         r.Status,
 		LatencyMs:      r.LatencyMs,
