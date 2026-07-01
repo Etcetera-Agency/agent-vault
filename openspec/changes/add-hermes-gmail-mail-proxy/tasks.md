@@ -15,14 +15,14 @@
 
 ## 3. Command, Config, And Preflight
 
-- [ ] 3.1 Add failing service-policy tests for parsing, validating, preserving, and listing an optional `mail_proxy` block on existing service allowlist records.
-- [ ] 3.2 Append `MailProxy` policy fields to the existing broker service shape without a database migration.
-- [ ] 3.3 Update existing service allowlist management surfaces to preserve and expose `mail_proxy.imap` and `mail_proxy.smtp` toggles.
-- [ ] 3.4 Add failing config tests for `--service`/env precedence, required service fields, both-protocols-disabled rejection, disabled service rejection, and loopback-only listener validation.
-- [ ] 3.5 Add `cmd/mail_proxy.go` with `init()` registration and no `cmd/root.go` edit.
-- [ ] 3.6 Reuse existing store open and master-key unlock helpers where possible.
-- [ ] 3.7 Preflight vault, selected service record, existing connected OAuth credential, refresh token, email, local password credential, and listener safety before opening listeners.
-- [ ] 3.8 Run service-policy and command/config tests.
+- [x] 3.1 Add failing service-policy tests for parsing, validating, preserving, and listing an optional `mail_proxy` block on existing service allowlist records.
+- [x] 3.2 Append `MailProxy` policy fields to the existing broker service shape without a database migration.
+- [x] 3.3 Update existing service allowlist management surfaces to preserve and expose `mail_proxy.imap` and `mail_proxy.smtp` toggles.
+- [x] 3.4 Add failing config tests for `--service`/env precedence, required service fields, both-protocols-disabled rejection, disabled service rejection, and loopback-only listener validation.
+- [x] 3.5 Add `cmd/mail_proxy.go` with `init()` registration and no `cmd/root.go` edit.
+- [x] 3.6 Reuse existing store open and master-key unlock helpers where possible.
+- [x] 3.7 Preflight vault, selected service record, existing connected OAuth credential, refresh token, email, local password credential, and listener safety before opening listeners.
+- [x] 3.8 Run service-policy and command/config tests.
 
 ## 4. Local TLS And Auth
 

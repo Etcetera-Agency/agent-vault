@@ -253,12 +253,13 @@ type candidateRef struct {
 }
 
 type serviceResponse struct {
-	Name          string                `json:"name"`
-	Host          string                `json:"host"`
-	Enabled       *bool                 `json:"enabled,omitempty"`
-	Auth          broker.Auth           `json:"auth"`
-	Substitutions []broker.Substitution `json:"substitutions,omitempty"`
-	Methods       []string              `json:"methods"`
+	Name          string                  `json:"name"`
+	Host          string                  `json:"host"`
+	Enabled       *bool                   `json:"enabled,omitempty"`
+	Auth          broker.Auth             `json:"auth"`
+	Substitutions []broker.Substitution   `json:"substitutions,omitempty"`
+	Methods       []string                `json:"methods"`
+	MailProxy     *broker.MailProxyPolicy `json:"mail_proxy,omitempty"`
 }
 
 func serviceResponses(services []broker.Service) []serviceResponse {
@@ -271,6 +272,7 @@ func serviceResponses(services []broker.Service) []serviceResponse {
 			Auth:          svc.Auth,
 			Substitutions: svc.Substitutions,
 			Methods:       broker.DisplayMethods(svc.Methods),
+			MailProxy:     svc.MailProxy,
 		}
 	}
 	return out

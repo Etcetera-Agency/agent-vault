@@ -192,10 +192,11 @@ File mode (upsert, not replace-all):
 
 			name, _ := cmd.Flags().GetString("name")
 			methods, _ := cmd.Flags().GetStringSlice("method")
+			mailProxy := mailProxyPolicyFromFlags(cmd)
 
 			host, path, port := broker.SplitInlineHost(host, "")
 
-			svc := broker.Service{Name: name, Host: host, Path: path, Port: port, Auth: *auth, Methods: methods}
+			svc := broker.Service{Name: name, Host: host, Path: path, Port: port, Auth: *auth, Methods: methods, MailProxy: mailProxy}
 			if disabled, _ := cmd.Flags().GetBool("disabled"); disabled {
 				f := false
 				svc.Enabled = &f
@@ -398,6 +399,23 @@ func readStdin() ([]byte, error) {
 	return buf, nil
 }
 
+func mailProxyPolicyFromFlags(cmd *cobra.Command) *broker.MailProxyPolicy {
+	imap, _ := cmd.Flags().GetBool("mail-proxy-imap")
+	smtp, _ := cmd.Flags().GetBool("mail-proxy-smtp")
+	email, _ := cmd.Flags().GetString("mail-proxy-email")
+	passwordCredential, _ := cmd.Flags().GetString("mail-proxy-local-password-credential")
+
+	if !imap && !smtp && email == "" && passwordCredential == "" {
+		return nil
+	}
+	return &broker.MailProxyPolicy{
+		Email:                   email,
+		LocalPasswordCredential: passwordCredential,
+		IMAP:                    imap,
+		SMTP:                    smtp,
+	}
+}
+
 func init() {
 	serviceSetCmd.Flags().StringP("file", "f", "", "Path to services YAML file")
 	serviceClearCmd.Flags().Bool("yes", false, "Skip confirmation prompt")
@@ -415,6 +433,10 @@ func init() {
 	serviceAddCmd.Flags().String("api-key-prefix", "", "Prefix for api-key value")
 	serviceAddCmd.Flags().StringSlice("method", nil, "Allowed HTTP method; repeat or comma-separate. Use '*' or omit for any method")
 	serviceAddCmd.Flags().Bool("disabled", false, "Create the service in a disabled state (proxy traffic returns 403 until enabled)")
+	serviceAddCmd.Flags().Bool("mail-proxy-imap", false, "Enable IMAP listener for this service's mail proxy policy")
+	serviceAddCmd.Flags().Bool("mail-proxy-smtp", false, "Enable SMTP listener for this service's mail proxy policy")
+	serviceAddCmd.Flags().String("mail-proxy-email", "", "Email address used for Gmail XOAUTH2 mail proxy auth")
+	serviceAddCmd.Flags().String("mail-proxy-local-password-credential", "", "Static credential key for Hermes-to-mail-proxy password")
 
 	// service remove flags
 	serviceRemoveCmd.Flags().Bool("yes", false, "Skip confirmation prompt")

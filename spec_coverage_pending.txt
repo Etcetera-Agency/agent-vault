@@ -8,10 +8,19 @@ Completed:
   - refresh error persistence
   - forced refresh
   - HTTP broker reuse of shared resolver
+- Command, config, and preflight:
+  - mail_proxy policy JSON/YAML round-trip
+  - service API response exposure
+  - service add CLI policy flags
+  - web service editor preservation/display
+  - mail-proxy command registration
+  - flag/env/default config precedence
+  - loopback listener validation
+  - disabled service and both-protocols-disabled rejection
+  - connected OAuth credential and refresh-token preflight
+  - local password credential preflight
 
 Pending:
-- mail_proxy service allowlist parsing, validation, preservation, listing
-- mail-proxy command config and preflight validation
 - local Agent Vault CA TLS and local password auth
 - Gmail XOAUTH2 payload helpers and forced-refresh retry wrappers
 - IMAP proxy parser, upstream XOAUTH2 auth, relay, cleanup

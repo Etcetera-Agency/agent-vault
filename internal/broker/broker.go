@@ -37,6 +37,15 @@ type Service struct {
 	Substitutions []Substitution `yaml:"substitutions,omitempty" json:"substitutions,omitempty"`
 	// fork-local: Store optional method policy; enforcement lives in later slices.
 	Methods []string `yaml:"methods,omitempty" json:"methods,omitempty"`
+	// AICODE-NOTE: MailProxy is policy only; no secrets live here. Runtime resolves named credentials.
+	MailProxy *MailProxyPolicy `yaml:"mail_proxy,omitempty" json:"mail_proxy,omitempty"`
+}
+
+type MailProxyPolicy struct {
+	Email                   string `yaml:"email,omitempty" json:"email,omitempty"`
+	LocalPasswordCredential string `yaml:"local_password_credential,omitempty" json:"local_password_credential,omitempty"`
+	IMAP                    bool   `yaml:"imap,omitempty" json:"imap,omitempty"`
+	SMTP                    bool   `yaml:"smtp,omitempty" json:"smtp,omitempty"`
 }
 
 // MatcherPattern returns the joined inline form (`slack.com/api/*`),

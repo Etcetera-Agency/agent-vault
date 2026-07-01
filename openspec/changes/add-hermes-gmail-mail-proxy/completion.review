@@ -9,3 +9,14 @@
 
 Verification:
 - `/usr/local/bin/go test ./internal/oauthcredential ./internal/brokercore`
+
+## Slice 3: Command, Config, And Preflight
+
+- Added `mail_proxy` service policy fields with JSON/YAML round-trip tests.
+- Exposed and preserved mail proxy policy through service API, CLI add flags, and web service editor state.
+- Added `internal/mailproxy` config and preflight validation for vault/service selection, loopback listeners, enabled protocol policy, OAuth credential connectivity, refresh token presence, and local password credential presence.
+- Added `agent-vault mail-proxy` command registration with store open and existing master-key unlock flow.
+
+Verification:
+- `/usr/local/bin/go test ./internal/mailproxy ./internal/broker ./internal/server ./cmd`
+- `npm run build --prefix web`

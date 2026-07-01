@@ -31,9 +31,17 @@ interface Service {
   methods?: string[];
   auth: Auth;
   substitutions?: Substitution[];
+  mail_proxy?: MailProxyPolicy;
 }
 
 type SubstitutionSurface = (typeof SUBSTITUTION_SURFACES)[number];
+
+interface MailProxyPolicy {
+  email?: string;
+  local_password_credential?: string;
+  imap?: boolean;
+  smtp?: boolean;
+}
 
 interface CatalogTemplate {
   id: string;
@@ -71,6 +79,9 @@ function credentialKeysForService(service: Service): string[] {
   }
   for (const sub of service.substitutions ?? []) {
     if (sub.key) keys.add(sub.key);
+  }
+  if (service.mail_proxy?.local_password_credential) {
+    keys.add(service.mail_proxy.local_password_credential);
   }
   return [...keys];
 }
@@ -290,6 +301,20 @@ export default function ServicesTab() {
                     {key}
                   </span>
                 ))}
+              </div>
+            )}
+            {service.mail_proxy && (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {service.mail_proxy.imap && (
+                  <span className="rounded-md border border-border bg-bg px-1.5 py-0.5 text-[11px] text-text-muted">
+                    IMAP
+                  </span>
+                )}
+                {service.mail_proxy.smtp && (
+                  <span className="rounded-md border border-border bg-bg px-1.5 py-0.5 text-[11px] text-text-muted">
+                    SMTP
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -710,6 +735,7 @@ function ServiceModal({
         methods: methods.length > 0 ? methods : ["*"],
         auth: buildAuth(),
         ...(cleanedSubs.length > 0 && { substitutions: cleanedSubs }),
+        ...(initial?.mail_proxy && { mail_proxy: initial.mail_proxy }),
       };
       await onSave(service);
     } catch (err: unknown) {
