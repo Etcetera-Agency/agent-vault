@@ -57,12 +57,12 @@
 
 ## 8. Lifecycle And Docs
 
-- [ ] 8.1 Add tests for SIGINT/SIGTERM shutdown, listener close, setup cancellation, relay grace period, and both-protocol-disabled failure.
-- [ ] 8.2 Implement graceful shutdown with `--shutdown-timeout`.
-- [ ] 8.3 Add `docs/guides/hermes-gmail-mail-proxy.mdx` with Gmail scopes, Agent Vault credentials, CA trust, and Hermes env.
-- [ ] 8.4 Update `openspec/TODO.md` for any deferred work discovered during implementation.
-- [ ] 8.5 Run full relevant test suite and `openspec validate add-hermes-gmail-mail-proxy --strict`.
-- [ ] 8.6 Use Code Simplifier before finishing implementation.
+- [x] 8.1 Add tests for SIGINT/SIGTERM shutdown, listener close, setup cancellation, relay grace period, and both-protocol-disabled failure.
+- [x] 8.2 Implement graceful shutdown with `--shutdown-timeout`.
+- [x] 8.3 Add `docs/guides/hermes-gmail-mail-proxy.mdx` with Gmail scopes, Agent Vault credentials, CA trust, and Hermes env.
+- [x] 8.4 Update `openspec/TODO.md` for any deferred work discovered during implementation.
+- [x] 8.5 Run full relevant test suite and `openspec validate add-hermes-gmail-mail-proxy --strict`.
+- [x] 8.6 Use Code Simplifier before finishing implementation.
 
 ## 9. Archive
 

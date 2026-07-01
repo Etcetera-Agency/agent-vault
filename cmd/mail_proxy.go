@@ -4,10 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/Infisical/agent-vault/internal/ca"
 	"github.com/Infisical/agent-vault/internal/mailproxy"
+	"github.com/Infisical/agent-vault/internal/oauth"
+	"github.com/Infisical/agent-vault/internal/oauthcredential"
 	"github.com/Infisical/agent-vault/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -49,7 +53,8 @@ var mailProxyCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if _, err := mailproxy.NewLocalAuthenticator(preflight.Service.MailProxy.Email, localPassword); err != nil {
+		authenticator, err := mailproxy.NewLocalAuthenticator(preflight.Service.MailProxy.Email, localPassword)
+		if err != nil {
 			return err
 		}
 
@@ -61,11 +66,35 @@ var mailProxyCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("initializing local CA: %w", err)
 		}
-		if _, err := mailproxy.LocalTLSConfig(caProvider); err != nil {
+		tlsConfig, err := mailproxy.LocalTLSConfig(caProvider)
+		if err != nil {
 			return err
 		}
 
-		return fmt.Errorf("mail proxy listeners are not implemented yet")
+		accessToken, err := mailproxy.LoadOAuthAccessToken(context.Background(), db, preflight.VaultID, preflight.Service.Auth.Token, masterKey.Key())
+		if err != nil {
+			return err
+		}
+
+		resolver := oauthcredential.NewResolver(db, masterKey.Key(), oauth.NewRefresher())
+		tokenProvider := &mailproxy.VaultOAuthTokenProvider{
+			Resolver:      resolver,
+			VaultID:       preflight.VaultID,
+			CredentialKey: preflight.Service.Auth.Token,
+			CurrentToken:  accessToken,
+		}
+
+		runCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+
+		proxy := &mailproxy.Proxy{
+			Config:        cfg.Config,
+			Policy:        &mailproxy.MailProxyPolicy{IMAP: preflight.Service.MailProxy.IMAP, SMTP: preflight.Service.MailProxy.SMTP},
+			TLSConfig:     tlsConfig,
+			Authenticator: authenticator,
+			TokenProvider: tokenProvider,
+		}
+		return proxy.Run(runCtx)
 	},
 }
 

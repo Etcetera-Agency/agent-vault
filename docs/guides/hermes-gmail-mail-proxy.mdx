@@ -1,0 +1,63 @@
+# Hermes Gmail mail proxy
+
+`agent-vault mail-proxy` exposes local IMAP and SMTP endpoints for Hermes while Agent Vault keeps Gmail OAuth credentials encrypted.
+
+## Gmail OAuth credential
+
+Create or update a Gmail OAuth credential with the Gmail mail scope:
+
+```text
+https://mail.google.com/
+```
+
+The credential must be connected and must have a refresh token. If Gmail rejects XOAUTH2 auth, reconnect the credential with the mail scope above.
+
+## Service policy
+
+Attach mail proxy policy to an existing Gmail service record:
+
+```yaml
+vault: hermes
+services:
+  - name: gmail-mail
+    host: gmail.googleapis.com/gmail/v1/users/me/messages*
+    methods: ["GET"]
+    auth:
+      type: bearer
+      token: GOOGLE_MAIL_OAUTH
+    mail_proxy:
+      email: agent@gmail.com
+      local_password_credential: HERMES_MAIL_LOCAL_PASSWORD
+      imap: true
+      smtp: true
+```
+
+`HERMES_MAIL_LOCAL_PASSWORD` is a static Agent Vault credential. It is not a Gmail password.
+
+## Run
+
+```bash
+agent-vault mail-proxy \
+  --vault hermes \
+  --service gmail-mail
+```
+
+Default listeners are loopback-only:
+
+```text
+127.0.0.1:1993  IMAP implicit TLS
+127.0.0.1:1587  SMTP STARTTLS
+```
+
+## Hermes env
+
+```env
+EMAIL_ADDRESS=agent@gmail.com
+EMAIL_PASSWORD=<value stored in HERMES_MAIL_LOCAL_PASSWORD>
+EMAIL_IMAP_HOST=127.0.0.1
+EMAIL_IMAP_PORT=1993
+EMAIL_SMTP_HOST=127.0.0.1
+EMAIL_SMTP_PORT=1587
+```
+
+Hermes must trust the Agent Vault root CA. Use `SSL_CERT_FILE` pointing at the Agent Vault CA PEM or install the CA in system trust. Do not disable TLS verification.

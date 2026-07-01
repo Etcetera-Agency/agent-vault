@@ -40,6 +40,16 @@ Verification:
 Verification:
 - `/usr/local/bin/go test ./internal/mailproxy`
 
+## Slice 8: Lifecycle And Docs
+
+- Added runnable mail proxy lifecycle with IMAP/SMTP listeners, context cancellation, listener close, and shutdown timeout.
+- Wired `agent-vault mail-proxy` through preflight, master-key unlock, local password load, OAuth token provider, CA-backed TLS config, signal handling, and proxy run.
+- Added Hermes Gmail mail proxy guide covering Gmail scopes, service policy, CA trust, and Hermes env vars.
+
+Verification:
+- `/usr/local/bin/go test ./internal/mailproxy ./cmd ./internal/broker ./internal/server`
+- `npm run build --prefix web`
+
 ## Slice 7: SMTP Proxy
 
 - Added local SMTP session handler with `EHLO`/`HELO`, `STARTTLS`, `AUTH PLAIN`, `AUTH LOGIN`, and pre-auth utility commands.

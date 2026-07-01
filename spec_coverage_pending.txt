@@ -47,7 +47,12 @@ Completed:
   - upstream SMTP dial, STARTTLS, and XOAUTH2 auth
   - raw relay after auth
   - connection cleanup via bidirectional relay
+- Lifecycle and docs:
+  - proxy listener open/close on context cancellation
+  - both-protocol-disabled rejection
+  - graceful shutdown timeout
+  - command signal context wiring
+  - Hermes Gmail guide with scope, credentials, CA trust, and env setup
 
 Pending:
-- shutdown lifecycle and docs
-- final full relevant suite and OpenSpec strict validation before archive
+- OpenSpec archive after final validation.

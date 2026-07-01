@@ -38,6 +38,24 @@ func LoadLocalPassword(ctx context.Context, store CredentialStore, vaultID, key 
 	return password, nil
 }
 
+func LoadOAuthAccessToken(ctx context.Context, store CredentialStore, vaultID, key string, encKey []byte) (string, error) {
+	credential, err := store.GetCredential(ctx, vaultID, key)
+	if err != nil || credential == nil {
+		return "", fmt.Errorf("oauth credential %q not found", key)
+	}
+	if credential.Type != "oauth" {
+		return "", fmt.Errorf("credential %q must be oauth", key)
+	}
+	token, err := crypto.Decrypt(credential.Ciphertext, credential.Nonce, encKey)
+	if err != nil {
+		return "", fmt.Errorf("decrypt oauth credential %q", key)
+	}
+	if len(token) == 0 {
+		return "", fmt.Errorf("oauth credential %q is not connected", key)
+	}
+	return string(token), nil
+}
+
 func NewLocalAuthenticator(email string, password []byte) (*LocalAuthenticator, error) {
 	if email == "" {
 		return nil, fmt.Errorf("email is required")
