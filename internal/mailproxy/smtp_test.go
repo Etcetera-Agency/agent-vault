@@ -98,13 +98,54 @@ func TestAuthenticateSMTPXOAUTH2RejectsNon235(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
 	defer client.Close()
-	restore := setTestSMTPUpstreamTLSConfig()
+	restore := setTestSMTPUpstreamTLSConfig(nil)
 	defer restore()
 
 	go fakeSMTPUpstream(t, client, "535 rejected")
 	err := AuthenticateSMTPXOAUTH2(context.Background(), server, "agent@gmail.com", "token")
 	if err != ErrXOAUTH2Rejected {
 		t.Fatalf("err = %v, want ErrXOAUTH2Rejected", err)
+	}
+}
+
+func TestServerNameFromAddress(t *testing.T) {
+	got, err := serverNameFromAddress("smtp.test.local:587")
+	if err != nil {
+		t.Fatalf("serverNameFromAddress: %v", err)
+	}
+	if got != "smtp.test.local" {
+		t.Fatalf("server name = %q, want smtp.test.local", got)
+	}
+}
+
+func TestDefaultSMTPUpstreamServerName(t *testing.T) {
+	got, err := serverNameFromAddress(DefaultSMTPUpstream)
+	if err != nil {
+		t.Fatalf("serverNameFromAddress: %v", err)
+	}
+	if got != "smtp.gmail.com" {
+		t.Fatalf("server name = %q, want smtp.gmail.com", got)
+	}
+}
+
+func TestAuthenticateSMTPXOAUTH2UsesConfiguredServerName(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+
+	var capturedServerName string
+	restore := setTestSMTPUpstreamTLSConfig(func(serverName string) {
+		capturedServerName = serverName
+	})
+	defer restore()
+
+	go fakeSMTPUpstream(t, client, "235 accepted")
+	err := AuthenticateSMTPXOAUTH2WithServerName(context.Background(), server, "agent@gmail.com", "token", "smtp.test.local")
+	if err != nil {
+		t.Fatalf("AuthenticateSMTPXOAUTH2WithServerName: %v", err)
+	}
+	if capturedServerName != "smtp.test.local" {
+		t.Fatalf("ServerName = %q, want smtp.test.local", capturedServerName)
 	}
 }
 
@@ -188,9 +229,12 @@ func smtpTestServerTLSConfig(t *testing.T) *tls.Config {
 	return tlsConfig
 }
 
-func setTestSMTPUpstreamTLSConfig() func() {
+func setTestSMTPUpstreamTLSConfig(capture func(string)) func() {
 	previous := smtpUpstreamTLSConfig
-	smtpUpstreamTLSConfig = func() *tls.Config {
+	smtpUpstreamTLSConfig = func(serverName string) *tls.Config {
+		if capture != nil {
+			capture(serverName)
+		}
 		return &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12} //nolint:gosec // test-only fake upstream
 	}
 	return func() {

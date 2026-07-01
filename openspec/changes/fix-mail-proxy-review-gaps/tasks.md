@@ -17,12 +17,12 @@
 
 ## 3. Slice 2: SMTP Upstream TLS ServerName
 
-- [ ] 3.1 Add failing test for `serverNameFromAddress("smtp.test.local:587") == "smtp.test.local"`.
-- [ ] 3.2 Add failing SMTP upstream STARTTLS test proving the TLS client uses the configured upstream host as `ServerName`.
-- [ ] 3.3 Pass derived upstream server name from `Proxy` into SMTP upstream auth.
-- [ ] 3.4 Keep default Gmail behavior unchanged for `smtp.gmail.com:587`.
-- [ ] 3.5 Run `/usr/local/bin/go test ./internal/mailproxy`.
-- [ ] 3.6 Use Code Simplifier for this slice.
+- [x] 3.1 Add failing test for `serverNameFromAddress("smtp.test.local:587") == "smtp.test.local"`.
+- [x] 3.2 Add failing SMTP upstream STARTTLS test proving the TLS client uses the configured upstream host as `ServerName`.
+- [x] 3.3 Pass derived upstream server name from `Proxy` into SMTP upstream auth.
+- [x] 3.4 Keep default Gmail behavior unchanged for `smtp.gmail.com:587`.
+- [x] 3.5 Run `/usr/local/bin/go test ./internal/mailproxy`.
+- [x] 3.6 Use Code Simplifier for this slice.
 
 ## 4. Slice 3: Existing Service Mail Proxy Toggle CLI
 

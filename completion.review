@@ -1,0 +1,7 @@
+fix-mail-proxy-review-gaps progress
+
+- Slice 1 fixed controlled shutdown: active IMAP/SMTP proxy connections are tracked by `mailproxy.Proxy` and closed after `ShutdownTimeout`; focused mailproxy tests cover stuck active sessions.
+- Slice 2 fixed SMTP upstream TLS verification: STARTTLS `ServerName` now comes from the configured SMTP upstream host, with default Gmail behavior preserved.
+
+Verification:
+- `/usr/local/bin/go test ./internal/mailproxy`

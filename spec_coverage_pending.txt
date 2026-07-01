@@ -4,6 +4,9 @@ Completed:
 - Controlled shutdown review gap:
   - active IMAP sessions are tracked and closed after shutdown timeout
   - active SMTP sessions are tracked and closed after shutdown timeout
+- SMTP upstream STARTTLS review gap:
+  - configured SMTP upstream host becomes TLS ServerName
+  - default `smtp.gmail.com:587` keeps `smtp.gmail.com` ServerName
 - Shared OAuth access token resolver:
   - valid token returned without refresh
   - five-minute-buffer refresh
@@ -58,6 +61,5 @@ Completed:
   - Hermes Gmail guide with scope, credentials, CA trust, and env setup
 
 Pending:
-- SMTP upstream STARTTLS must derive TLS ServerName from configured upstream host.
 - Existing service `mail_proxy` policy must be mutable by CLI without dropping unrelated service fields.
 - Hygiene/docs cleanup must remove concept patch trailing whitespace and document the CLI toggle command.

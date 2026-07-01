@@ -145,6 +145,11 @@ func (p *Proxy) acceptIMAP(ctx context.Context, listener net.Listener, wg *sync.
 
 func (p *Proxy) acceptSMTP(ctx context.Context, listener net.Listener, wg *sync.WaitGroup, errCh chan<- error) {
 	defer wg.Done()
+	upstreamServerName, err := serverNameFromAddress(p.Config.SMTPUpstream)
+	if err != nil {
+		errCh <- fmt.Errorf("smtp upstream server name: %w", err)
+		return
+	}
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -160,10 +165,11 @@ func (p *Proxy) acceptSMTP(ctx context.Context, listener net.Listener, wg *sync.
 			defer wg.Done()
 			defer done()
 			_ = HandleSMTPSession(ctx, conn, SMTPOptions{
-				TLSConfig:     p.TLSConfig,
-				Authenticator: p.Authenticator,
-				Email:         p.ConfiguredEmail(),
-				TokenProvider: p.TokenProvider,
+				TLSConfig:          p.TLSConfig,
+				Authenticator:      p.Authenticator,
+				Email:              p.ConfiguredEmail(),
+				TokenProvider:      p.TokenProvider,
+				UpstreamServerName: upstreamServerName,
 				UpstreamDial: func(ctx context.Context) (net.Conn, error) {
 					return DialSMTPUpstream(ctx, p.Config.SMTPUpstream)
 				},

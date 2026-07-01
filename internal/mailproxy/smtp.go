@@ -11,12 +11,13 @@ import (
 )
 
 type SMTPOptions struct {
-	TLSConfig     *tls.Config
-	Authenticator *LocalAuthenticator
-	Email         string
-	TokenProvider TokenProvider
-	UpstreamDial  func(context.Context) (net.Conn, error)
-	UpstreamAuth  func(context.Context, net.Conn, string, string) error
+	TLSConfig          *tls.Config
+	Authenticator      *LocalAuthenticator
+	Email              string
+	TokenProvider      TokenProvider
+	UpstreamDial       func(context.Context) (net.Conn, error)
+	UpstreamAuth       func(context.Context, net.Conn, string, string) error
+	UpstreamServerName string
 }
 
 func HandleSMTPSession(ctx context.Context, conn net.Conn, opts SMTPOptions) error {
@@ -101,7 +102,9 @@ func handleSMTPAuth(ctx context.Context, conn net.Conn, reader *bufio.Reader, wr
 	}
 	authFunc := opts.UpstreamAuth
 	if authFunc == nil {
-		authFunc = AuthenticateSMTPXOAUTH2
+		authFunc = func(ctx context.Context, conn net.Conn, email, token string) error {
+			return AuthenticateSMTPXOAUTH2WithServerName(ctx, conn, email, token, opts.UpstreamServerName)
+		}
 	}
 	if err := WithForcedRefreshRetry(ctx, opts.TokenProvider, func(token string) error {
 		return authFunc(ctx, upstream, opts.Email, token)
@@ -117,7 +120,11 @@ func handleSMTPAuth(ctx context.Context, conn net.Conn, reader *bufio.Reader, wr
 	return nil
 }
 
-func AuthenticateSMTPXOAUTH2(_ context.Context, conn net.Conn, email, token string) error {
+func AuthenticateSMTPXOAUTH2(ctx context.Context, conn net.Conn, email, token string) error {
+	return AuthenticateSMTPXOAUTH2WithServerName(ctx, conn, email, token, "smtp.gmail.com")
+}
+
+func AuthenticateSMTPXOAUTH2WithServerName(_ context.Context, conn net.Conn, email, token, serverName string) error {
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
 
@@ -137,7 +144,7 @@ func AuthenticateSMTPXOAUTH2(_ context.Context, conn net.Conn, email, token stri
 		return err
 	}
 
-	tlsConn := tls.Client(conn, smtpUpstreamTLSConfig())
+	tlsConn := tls.Client(conn, smtpUpstreamTLSConfig(serverName))
 	reader = bufio.NewReader(tlsConn)
 	writer = bufio.NewWriter(tlsConn)
 	if err := tlsConn.Handshake(); err != nil {
@@ -161,6 +168,14 @@ func AuthenticateSMTPXOAUTH2(_ context.Context, conn net.Conn, email, token stri
 func DialSMTPUpstream(ctx context.Context, address string) (net.Conn, error) {
 	var dialer net.Dialer
 	return dialer.DialContext(ctx, "tcp", address)
+}
+
+func serverNameFromAddress(addr string) (string, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", err
+	}
+	return host, nil
 }
 
 func parseSMTPCommand(line string) (command string, args string) {
@@ -266,9 +281,12 @@ func writeSMTP(writer *bufio.Writer, line string) error {
 	return writer.Flush()
 }
 
-var smtpUpstreamTLSConfig = func() *tls.Config {
+var smtpUpstreamTLSConfig = func(serverName string) *tls.Config {
+	if serverName == "" {
+		serverName = "smtp.gmail.com"
+	}
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
-		ServerName: "smtp.gmail.com",
+		ServerName: serverName,
 	}
 }
