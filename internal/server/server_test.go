@@ -6092,6 +6092,60 @@ func TestServicesQuotaUsageReturnsAccountUsageWithoutCredentialValues(t *testing
 	}
 }
 
+func TestServicesQuotaUsageIncludesAccountOnlyServices(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	ms.credentials["root-ns-id:APIFY_TOKEN_1"] = &store.Credential{
+		ID: "c1", VaultID: "root-ns-id", Key: "APIFY_TOKEN_1", PoolProvider: "apify", Ciphertext: []byte("secret-token-one"),
+	}
+	ms.credentials["root-ns-id:APIFY_TOKEN_2"] = &store.Credential{
+		ID: "c2", VaultID: "root-ns-id", Key: "APIFY_TOKEN_2", PoolProvider: "apify", Ciphertext: []byte("secret-token-two"),
+	}
+	ms.brokerConfigs["root-ns-id"] = &store.BrokerConfig{
+		ID: "bc-1", VaultID: "root-ns-id",
+		ServicesJSON: `[{"name":"apify","host":"api.apify.com","auth":{"type":"bearer","token":"APIFY_TOKEN_1"},"account_pool_provider":"apify","accounts":[{"id":"acct1","credential_key":"APIFY_TOKEN_1"},{"id":"acct2","credential_key":"APIFY_TOKEN_2"}]}]`,
+	}
+	srv := newTestServer(withStore(ms))
+	now := time.Now()
+	srv.egressQuota.Seed([]egressquota.Snapshot{
+		{VaultID: "root-ns-id", MatchedService: "apify", AccountID: "acct1", CredentialKeys: []string{"APIFY_TOKEN_1"}, CreatedAt: now, Status: http.StatusOK},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/vaults/default/services/quota-usage", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "secret-token") {
+		t.Fatalf("response leaked credential value: %s", rec.Body.String())
+	}
+	var resp struct {
+		Services []struct {
+			Name     string `json:"name"`
+			Accounts []struct {
+				ID          string `json:"id"`
+				DailyUsed   int    `json:"daily_used"`
+				DailyCap    *int   `json:"daily_cap,omitempty"`
+				MonthlyUsed int    `json:"monthly_used"`
+				MonthlyCap  *int   `json:"monthly_cap,omitempty"`
+				State       string `json:"state"`
+			} `json:"accounts"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode quota usage: %v", err)
+	}
+	if len(resp.Services) != 1 || len(resp.Services[0].Accounts) != 2 {
+		t.Fatalf("unexpected usage response: %+v", resp.Services)
+	}
+	first := resp.Services[0].Accounts[0]
+	if first.ID != "acct1" || first.DailyUsed != 1 || first.MonthlyUsed != 1 || first.DailyCap != nil || first.MonthlyCap != nil || first.State != "available" {
+		t.Fatalf("unexpected account-only usage: %+v", first)
+	}
+}
+
 func TestServicesUpsertRejectsUnknownQuotaAccountCredential(t *testing.T) {
 	ms, token := setupMockStoreWithSession(t)
 	ms.brokerConfigs["root-ns-id"] = &store.BrokerConfig{

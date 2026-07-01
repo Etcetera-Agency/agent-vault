@@ -26,6 +26,15 @@ add-credential-pool-eligibility progress
 - Credential/service UI and TypeScript SDK types expose the pool metadata.
 - Docs and OpenSpec coverage updated for explicit pool opt-in.
 
+add-account-only-rotation progress
+
+- Account pools now activate runtime rotation without numeric quota caps.
+- Empty quota policy applies no daily/monthly/rpm/concurrency limits, while
+  cooldown and usage tracking still work per account id.
+- Quota usage includes account-only services so the UI renders account states
+  instead of generic configured text.
+- Docs and coverage updated for account-only rotation.
+
 Verification:
 - `/usr/local/bin/go test ./internal/mailproxy`
 - `/usr/local/bin/go test ./cmd ./internal/server ./internal/broker`
@@ -41,3 +50,6 @@ Verification:
 - `npm run build --prefix web`
 - `npm run typecheck --prefix sdks/sdk-typescript`
 - `openspec validate add-credential-pool-eligibility --strict`
+- `go test ./internal/egressquota ./internal/brokercore ./internal/mitm ./internal/server`
+- `npm run build --prefix web`
+- `openspec validate add-account-only-rotation --strict`

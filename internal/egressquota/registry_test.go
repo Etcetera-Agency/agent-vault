@@ -146,6 +146,123 @@ func TestReserveRoundRobinAlternatesAccounts(t *testing.T) {
 	}
 }
 
+func TestReserveRoundRobinAlternatesAccountOnlyService(t *testing.T) {
+	reg := New()
+	svc := quotaService(nil)
+	svc.Rotation = "round_robin"
+	svc.Accounts = []broker.ServiceAccount{
+		{ID: "acct1", CredentialKey: "APIFY_TOKEN_1"},
+		{ID: "acct2", CredentialKey: "APIFY_TOKEN_2"},
+	}
+
+	first, denial := reg.Reserve(context.Background(), "vault-1", svc)
+	if denial != nil {
+		t.Fatalf("unexpected first denial: %+v", denial)
+	}
+	first.Commit(http.StatusOK)
+	first.Release()
+	second, denial := reg.Reserve(context.Background(), "vault-1", svc)
+	if denial != nil {
+		t.Fatalf("unexpected second denial: %+v", denial)
+	}
+	second.Release()
+	if first.AccountID() != "acct1" || second.AccountID() != "acct2" {
+		t.Fatalf("accounts = %q then %q, want acct1 then acct2", first.AccountID(), second.AccountID())
+	}
+	day, month, _ := reg.Usage("vault-1", "apify", "acct1")
+	if day != 1 || month != 1 {
+		t.Fatalf("acct1 usage = day %d month %d, want 1/1", day, month)
+	}
+}
+
+func TestReserveLeastUsedSelectsLowerUsageAccountOnlyService(t *testing.T) {
+	reg := New()
+	reg.Seed([]Snapshot{
+		{VaultID: "vault-1", MatchedService: "apify", AccountID: "acct1", CredentialKeys: []string{"APIFY_TOKEN_1"}, CreatedAt: time.Now(), Status: http.StatusOK},
+		{VaultID: "vault-1", MatchedService: "apify", AccountID: "acct1", CredentialKeys: []string{"APIFY_TOKEN_1"}, CreatedAt: time.Now(), Status: http.StatusOK},
+	})
+	svc := quotaService(nil)
+	svc.Rotation = "least_used"
+	svc.Accounts = []broker.ServiceAccount{
+		{ID: "acct1", CredentialKey: "APIFY_TOKEN_1"},
+		{ID: "acct2", CredentialKey: "APIFY_TOKEN_2"},
+	}
+
+	res, denial := reg.Reserve(context.Background(), "vault-1", svc)
+	if denial != nil {
+		t.Fatalf("unexpected denial: %+v", denial)
+	}
+	if res.AccountID() != "acct2" {
+		t.Fatalf("account = %q, want acct2", res.AccountID())
+	}
+	res.Release()
+}
+
+func TestReserveSkipsCooldownAccountOnlyService(t *testing.T) {
+	reg := New()
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	reg.now = func() time.Time { return now }
+	svc := quotaService(nil)
+	svc.Rotation = "round_robin"
+	svc.Accounts = []broker.ServiceAccount{
+		{ID: "acct1", CredentialKey: "APIFY_TOKEN_1"},
+		{ID: "acct2", CredentialKey: "APIFY_TOKEN_2"},
+	}
+
+	first, denial := reg.Reserve(context.Background(), "vault-1", svc)
+	if denial != nil {
+		t.Fatalf("unexpected first denial: %+v", denial)
+	}
+	first.Cooldown(2 * time.Minute)
+	first.Release()
+	second, denial := reg.Reserve(context.Background(), "vault-1", svc)
+	if denial != nil {
+		t.Fatalf("unexpected second denial: %+v", denial)
+	}
+	if second.AccountID() != "acct2" {
+		t.Fatalf("account = %q, want acct2", second.AccountID())
+	}
+	second.Release()
+}
+
+func TestReserveDeniesWhenAllAccountOnlyAccountsCooling(t *testing.T) {
+	reg := New()
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	reg.now = func() time.Time { return now }
+	svc := quotaService(nil)
+	svc.Rotation = "round_robin"
+	svc.Accounts = []broker.ServiceAccount{
+		{ID: "acct1", CredentialKey: "APIFY_TOKEN_1"},
+		{ID: "acct2", CredentialKey: "APIFY_TOKEN_2"},
+	}
+
+	first, denial := reg.Reserve(context.Background(), "vault-1", svc)
+	if denial != nil {
+		t.Fatalf("unexpected first denial: %+v", denial)
+	}
+	first.Cooldown(2 * time.Minute)
+	first.Release()
+	second, denial := reg.Reserve(context.Background(), "vault-1", svc)
+	if denial != nil {
+		t.Fatalf("unexpected second denial: %+v", denial)
+	}
+	second.Cooldown(time.Minute)
+	second.Release()
+
+	_, denial = reg.Reserve(context.Background(), "vault-1", svc)
+	if denial == nil || denial.Reason != "cooldown" {
+		t.Fatalf("denial = %+v, want cooldown", denial)
+	}
+}
+
+func TestReserveNoQuotaNoAccountsPassthrough(t *testing.T) {
+	reg := New()
+	res, denial := reg.Reserve(context.Background(), "vault-1", quotaService(nil))
+	if res != nil || denial != nil {
+		t.Fatalf("reservation/denial = %+v/%+v, want nil/nil", res, denial)
+	}
+}
+
 func TestReserveSkipsCooldownAccount(t *testing.T) {
 	reg := New()
 	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)

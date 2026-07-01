@@ -182,7 +182,7 @@ func (r *Registry) Reconcile(rows []Snapshot) {
 }
 
 func (r *Registry) Reserve(ctx context.Context, vaultID string, svc broker.Service) (*Reservation, *Decision) {
-	if svc.Quota == nil {
+	if svc.Quota == nil && len(svc.Accounts) == 0 {
 		return nil, nil
 	}
 	select {

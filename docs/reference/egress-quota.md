@@ -26,6 +26,12 @@ Services with account pools must set `account_pool_provider` to the same slug.
 Every `accounts[].credential_key` must reference a credential whose
 `pool_provider` exactly matches the service `account_pool_provider`.
 
+Numeric quota caps are optional. A service can declare `accounts`, `rotation`,
+and `account_pool_provider` without `quota`; Agent Vault will still rotate
+between eligible account credentials and honor cooldown/failover state, but it
+will not apply daily, monthly, rpm, or concurrency limits unless those caps are
+configured.
+
 This keeps identity-bound credentials, such as Gmail, Google Calendar, and mail
 proxy credentials, isolated unless an operator explicitly opts them into a
 provider pool.

@@ -190,8 +190,10 @@ func (p *StoreCredentialProvider) Inject(ctx context.Context, vaultID, targetHos
 			}, &ErrEgressQuotaExceeded{Decision: denial}
 		}
 		quotaReservation = reservation
-		selectedAccountID = reservation.AccountID()
-		selectedCredentialKey = reservation.CredentialKey()
+		if reservation != nil {
+			selectedAccountID = reservation.AccountID()
+			selectedCredentialKey = reservation.CredentialKey()
+		}
 		if selectedCredentialKey != "" {
 			copySvc := *matched
 			copySvc.Auth = accountAuth(copySvc.Auth, selectedCredentialKey)

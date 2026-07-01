@@ -449,7 +449,7 @@ func (s *Server) handleServicesQuotaUsage(w http.ResponseWriter, r *http.Request
 	out := []serviceUsage{}
 	now := time.Now()
 	for _, svc := range services {
-		if svc.Quota == nil {
+		if svc.Quota == nil && len(svc.Accounts) == 0 {
 			continue
 		}
 		// AICODE-NOTE: Quota usage is a read-only UI surface; return credential keys and counters only, never decrypted credential values.
@@ -464,8 +464,11 @@ func (s *Server) handleServicesQuotaUsage(w http.ResponseWriter, r *http.Request
 		}
 		entry := serviceUsage{Name: svc.Name}
 		for _, acct := range accounts {
-			dailyCap := svc.Quota.DailyCap
-			monthlyCap := svc.Quota.MonthlyCap
+			var dailyCap, monthlyCap *int
+			if svc.Quota != nil {
+				dailyCap = svc.Quota.DailyCap
+				monthlyCap = svc.Quota.MonthlyCap
+			}
 			if acct.DailyCap != nil {
 				dailyCap = acct.DailyCap
 			}

@@ -142,6 +142,21 @@ Completed:
 Pending:
 - None for `add-credential-pool-eligibility`; ready to archive.
 
+add-account-only-rotation coverage
+
+Completed:
+- Quota registry now runs for services with `accounts` even when `quota` is absent.
+- Account-only services rotate credentials and honor cooldown while applying no numeric caps unless configured.
+- Broker injection handles no-op reservations for services with no quota and no accounts.
+- Account-only reservations record selected account usage for usage snapshots.
+- Quota usage API includes account-only services and omits caps when no quota cap is configured.
+- Existing pool-eligibility validation rejects account-only unpoolable or wrong-provider credentials.
+- Tests cover account-only round-robin, cooldown skip, passthrough parity, injection, and usage output.
+- Docs describe account-only rotation semantics.
+
+Pending:
+- None for `add-account-only-rotation`; ready to archive.
+
 add-quota-ui coverage
 
 Completed:
