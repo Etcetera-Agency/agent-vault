@@ -336,6 +336,7 @@ type Store interface {
 	SetCredential(ctx context.Context, vaultID, key string, ciphertext, nonce []byte) (*store.Credential, error)
 	GetCredential(ctx context.Context, vaultID, key string) (*store.Credential, error)
 	ListCredentials(ctx context.Context, vaultID string) ([]store.Credential, error)
+	UpdateCredentialPoolProvider(ctx context.Context, vaultID, key, poolProvider string) error
 	DeleteCredential(ctx context.Context, vaultID, key string) error
 
 	// OAuth credentials

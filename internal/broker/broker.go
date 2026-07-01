@@ -40,9 +40,10 @@ type Service struct {
 	// AICODE-NOTE: MailProxy is policy only; no secrets live here. Runtime resolves named credentials.
 	MailProxy *MailProxyPolicy `yaml:"mail_proxy,omitempty" json:"mail_proxy,omitempty"`
 	// fork-local: Egress quota config is policy only here; runtime enforcement lives in internal/egressquota.
-	Quota    *ServiceQuota    `yaml:"quota,omitempty" json:"quota,omitempty"`
-	Accounts []ServiceAccount `yaml:"accounts,omitempty" json:"accounts,omitempty"`
-	Rotation string           `yaml:"rotation,omitempty" json:"rotation,omitempty"`
+	Quota               *ServiceQuota    `yaml:"quota,omitempty" json:"quota,omitempty"`
+	Accounts            []ServiceAccount `yaml:"accounts,omitempty" json:"accounts,omitempty"`
+	Rotation            string           `yaml:"rotation,omitempty" json:"rotation,omitempty"`
+	AccountPoolProvider string           `yaml:"account_pool_provider,omitempty" json:"account_pool_provider,omitempty"`
 }
 
 // AICODE-NOTE: Account CredentialKey is a reference only; service config must never carry credential values.
@@ -432,6 +433,11 @@ func (s *Service) ValidateQuotaConfig() error {
 	case "", "least_used", "round_robin":
 	default:
 		return fmt.Errorf("rotation %q must be one of least_used, round_robin", s.Rotation)
+	}
+	if s.AccountPoolProvider != "" {
+		if err := ValidateSlug(s.AccountPoolProvider); err != nil {
+			return fmt.Errorf("account_pool_provider: %w", err)
+		}
 	}
 	seen := make(map[string]int, len(s.Accounts))
 	for i, acct := range s.Accounts {

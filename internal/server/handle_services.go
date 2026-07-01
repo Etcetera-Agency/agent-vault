@@ -11,6 +11,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/catalog"
 	"github.com/Infisical/agent-vault/internal/proposal"
+	"github.com/Infisical/agent-vault/internal/store"
 )
 
 // rejectDeprecatedDescription returns the index of the first services
@@ -254,32 +255,34 @@ type candidateRef struct {
 }
 
 type serviceResponse struct {
-	Name          string                  `json:"name"`
-	Host          string                  `json:"host"`
-	Enabled       *bool                   `json:"enabled,omitempty"`
-	Auth          broker.Auth             `json:"auth"`
-	Substitutions []broker.Substitution   `json:"substitutions,omitempty"`
-	Methods       []string                `json:"methods"`
-	MailProxy     *broker.MailProxyPolicy `json:"mail_proxy,omitempty"`
-	Quota         *broker.ServiceQuota    `json:"quota,omitempty"`
-	Accounts      []broker.ServiceAccount `json:"accounts,omitempty"`
-	Rotation      string                  `json:"rotation,omitempty"`
+	Name                string                  `json:"name"`
+	Host                string                  `json:"host"`
+	Enabled             *bool                   `json:"enabled,omitempty"`
+	Auth                broker.Auth             `json:"auth"`
+	Substitutions       []broker.Substitution   `json:"substitutions,omitempty"`
+	Methods             []string                `json:"methods"`
+	MailProxy           *broker.MailProxyPolicy `json:"mail_proxy,omitempty"`
+	Quota               *broker.ServiceQuota    `json:"quota,omitempty"`
+	Accounts            []broker.ServiceAccount `json:"accounts,omitempty"`
+	Rotation            string                  `json:"rotation,omitempty"`
+	AccountPoolProvider string                  `json:"account_pool_provider,omitempty"`
 }
 
 func serviceResponses(services []broker.Service) []serviceResponse {
 	out := make([]serviceResponse, len(services))
 	for i, svc := range services {
 		out[i] = serviceResponse{
-			Name:          svc.Name,
-			Host:          svc.MatcherPattern(),
-			Enabled:       svc.Enabled,
-			Auth:          svc.Auth,
-			Substitutions: svc.Substitutions,
-			Methods:       broker.DisplayMethods(svc.Methods),
-			MailProxy:     svc.MailProxy,
-			Quota:         svc.Quota,
-			Accounts:      svc.Accounts,
-			Rotation:      svc.Rotation,
+			Name:                svc.Name,
+			Host:                svc.MatcherPattern(),
+			Enabled:             svc.Enabled,
+			Auth:                svc.Auth,
+			Substitutions:       svc.Substitutions,
+			Methods:             broker.DisplayMethods(svc.Methods),
+			MailProxy:           svc.MailProxy,
+			Quota:               svc.Quota,
+			Accounts:            svc.Accounts,
+			Rotation:            svc.Rotation,
+			AccountPoolProvider: svc.AccountPoolProvider,
 		}
 	}
 	return out
@@ -301,14 +304,24 @@ func (s *Server) validateServiceAccountCredentialRefs(ctx context.Context, vault
 	if err != nil {
 		return fmt.Errorf("load credential keys: %w", err)
 	}
-	existing := make(map[string]bool, len(creds))
+	existing := make(map[string]store.Credential, len(creds))
 	for _, cred := range creds {
-		existing[cred.Key] = true
+		existing[cred.Key] = cred
 	}
 	for i, svc := range services {
+		if len(svc.Accounts) == 0 {
+			continue
+		}
+		if svc.AccountPoolProvider == "" {
+			return fmt.Errorf("service %d: account_pool_provider is required when accounts are set", i)
+		}
 		for j, acct := range svc.Accounts {
-			if !existing[acct.CredentialKey] {
+			cred, ok := existing[acct.CredentialKey]
+			if !ok {
 				return fmt.Errorf("service %d account %d: credential_key %q does not exist", i, j, acct.CredentialKey)
+			}
+			if cred.PoolProvider != svc.AccountPoolProvider {
+				return fmt.Errorf("service %d account %d: credential_key %q is not enabled for account_pool_provider %q", i, j, acct.CredentialKey, svc.AccountPoolProvider)
 			}
 		}
 	}

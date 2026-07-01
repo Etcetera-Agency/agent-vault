@@ -22,7 +22,9 @@ export interface Credential {
   /** Credential key (SCREAMING_SNAKE_CASE). */
   key: string;
   /** Decrypted credential value. */
-  value: string;
+  value?: string;
+  /** Account-pool provider id. Empty/undefined means not poolable. */
+  poolProvider?: string;
 }
 
 /**
@@ -92,6 +94,7 @@ export class CredentialsResource {
       credentials: res.credentials?.map((c) => ({
         key: c.key,
         value: c.value ?? "",
+        poolProvider: c.pool_provider,
       })),
     };
   }
@@ -110,8 +113,17 @@ export class CredentialsResource {
    */
   async set(
     credentials: Record<string, string>,
+    metadata?: Record<string, { poolProvider?: string }>,
   ): Promise<SetCredentialsResult> {
     const body: Record<string, unknown> = { credentials };
+    if (metadata) {
+      body.metadata = Object.fromEntries(
+        Object.entries(metadata).map(([key, value]) => [
+          key,
+          { pool_provider: value.poolProvider },
+        ]),
+      );
+    }
     if (this.vaultName) {
       body.vault = this.vaultName;
     }

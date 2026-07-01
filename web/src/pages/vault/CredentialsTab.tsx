@@ -35,6 +35,7 @@ export default function CredentialsTab() {
     token_auth_method?: string;
     access_token?: string;
     refresh_token?: string;
+    pool_provider?: string;
     unavailable?: boolean;
   }
   const [credentials, setCredentials] = useState<CredentialInfo[]>([]);
@@ -276,6 +277,19 @@ export default function CredentialsTab() {
         return <span className="text-sm text-text">{label}</span>;
       },
     },
+    {
+      key: "pool",
+      header: "Pool",
+      className: "w-[160px]",
+      render: (cred) =>
+        cred.pool_provider ? (
+          <span className="text-xs font-mono text-primary bg-primary/10 rounded px-2 py-1">
+            {cred.pool_provider}
+          </span>
+        ) : (
+          <span className="text-sm text-text-dim">Not poolable</span>
+        ),
+    },
     ...(canReveal
       ? [
           {
@@ -513,7 +527,7 @@ interface Entry {
 }
 
 function CredentialModal({ vaultName, editingKey, editingCred, onClose, onSaved }: {
-  vaultName: string; editingKey: string | null; editingCred?: { type?: string; authorization_url?: string; token_url?: string; client_id?: string; scopes?: string; client_secret?: string; token_auth_method?: string; access_token?: string; refresh_token?: string }; onClose: () => void; onSaved: () => void;
+  vaultName: string; editingKey: string | null; editingCred?: { type?: string; authorization_url?: string; token_url?: string; client_id?: string; scopes?: string; client_secret?: string; token_auth_method?: string; access_token?: string; refresh_token?: string; pool_provider?: string }; onClose: () => void; onSaved: () => void;
 }) {
   const isEdit = editingKey !== null;
   const editType = editingCred?.type;
@@ -522,6 +536,7 @@ function CredentialModal({ vaultName, editingKey, editingCred, onClose, onSaved 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  const [poolProvider, setPoolProvider] = useState(editingCred?.pool_provider ?? "");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [oauthKey, setOauthKey] = useState(editType === "oauth" && editingKey ? editingKey : "");
@@ -545,21 +560,32 @@ function CredentialModal({ vaultName, editingKey, editingCred, onClose, onSaved 
 
   const [oauthMode, setOauthMode] = useState<"connect" | "upload">(!isEdit || editingCred?.authorization_url ? "connect" : "upload");
   const isTokenUpload = oauthMode === "upload";
-  const canSubmitStatic = entries.every((e) => e.key.trim() && e.value.trim());
+  const metadataChanged = poolProvider.trim() !== (editingCred?.pool_provider ?? "");
+  const canSubmitStatic = isEdit
+    ? entries.every((e) => e.key.trim()) && (entries.some((e) => e.value.trim()) || metadataChanged)
+    : entries.every((e) => e.key.trim() && e.value.trim());
   const canSubmitOAuthConnect = !!(oauthKey.trim() && oauthTokenUrl.trim() && oauthClientId.trim() && oauthAuthUrl.trim());
   const canSubmitOAuthTokens = !!(oauthKey.trim() && (oauthAccessToken.trim() || oauthRefreshToken.trim()));
-  const canSubmit = credType === "static" ? canSubmitStatic : isTokenUpload ? canSubmitOAuthTokens : oauthConnected;
+  const canSubmit = credType === "static" ? canSubmitStatic : isTokenUpload ? canSubmitOAuthTokens || metadataChanged : oauthConnected || metadataChanged;
 
   async function handleSubmit() {
     if (!canSubmit) return;
     setSaving(true); setError("");
     try {
+      let metadataKeys: string[] = [];
       if (credType === "static") {
         const credentials: Record<string, string> = {};
-        for (const entry of entries) credentials[entry.key.trim()] = entry.value.trim();
-        const resp = await apiFetch("/v1/credentials", { method: "POST", body: JSON.stringify({ vault: vaultName, credentials }) });
-        if (!resp.ok) { const d = await resp.json(); throw new Error(d.error || "Failed to save."); }
+        for (const entry of entries) {
+          const key = entry.key.trim();
+          if (entry.value.trim()) credentials[key] = entry.value.trim();
+          metadataKeys.push(key);
+        }
+        if (Object.keys(credentials).length > 0) {
+          const resp = await apiFetch("/v1/credentials", { method: "POST", body: JSON.stringify({ vault: vaultName, credentials }) });
+          if (!resp.ok) { const d = await resp.json(); throw new Error(d.error || "Failed to save."); }
+        }
       } else if (isTokenUpload) {
+        metadataKeys = [oauthKey.trim()];
         const body: Record<string, unknown> = { vault: vaultName, key: oauthKey.trim(), access_token: oauthAccessToken.trim() };
         if (oauthRefreshToken.trim()) body.refresh_token = oauthRefreshToken.trim();
         if (oauthTokenUrl.trim()) body.token_url = oauthTokenUrl.trim();
@@ -568,6 +594,23 @@ function CredentialModal({ vaultName, editingKey, editingCred, onClose, onSaved 
         if (oauthTokenAuthMethod && oauthTokenAuthMethod !== "none") body.token_auth_method = oauthTokenAuthMethod;
         const resp = await apiFetch("/v1/credentials/oauth/tokens", { method: "POST", body: JSON.stringify(body) });
         if (!resp.ok) { const d = await resp.json(); throw new Error(d.error || "Failed to save."); }
+      } else {
+        metadataKeys = [oauthKey.trim()];
+      }
+      const metadata = Object.fromEntries(
+        metadataKeys
+          .filter(Boolean)
+          .map((key) => [key, { pool_provider: poolProvider.trim() || undefined }])
+      );
+      if (Object.keys(metadata).length > 0) {
+        const metadataResp = await apiFetch("/v1/credentials", {
+          method: "POST",
+          body: JSON.stringify({ vault: vaultName, metadata }),
+        });
+        if (!metadataResp.ok) {
+          const d = await metadataResp.json();
+          throw new Error(d.error || "Failed to save credential metadata.");
+        }
       }
       onSaved();
     } catch (err: unknown) { setError(err instanceof Error ? err.message : "An error occurred."); } finally { setSaving(false); }
@@ -639,7 +682,7 @@ function CredentialModal({ vaultName, editingKey, editingCred, onClose, onSaved 
       description={credType === "oauth" ? "Set up an OAuth 2.0 credential. The proxy automatically refreshes the access token." : "Credentials are injected into proxied requests. Values are encrypted at rest."}
       footer={<>
         <Button variant="secondary" onClick={onClose}>Cancel</Button>
-        {credType === "oauth" && !isTokenUpload && !oauthConnected ? (
+        {credType === "oauth" && !isTokenUpload && !oauthConnected && !metadataChanged ? (
           <Button onClick={handleOAuthConnect} disabled={!canSubmitOAuthConnect} loading={oauthConnecting}>
             {oauthConnecting ? "Waiting for authorization..." : "Connect"}
           </Button>
@@ -760,6 +803,13 @@ function CredentialModal({ vaultName, editingKey, editingCred, onClose, onSaved 
             </>
           )}
         </>)}
+        <FormField label="Pool Provider" helperText="Blank credentials are not eligible for account pools.">
+          <Input
+            placeholder="e.g. apify"
+            value={poolProvider}
+            onChange={(e) => setPoolProvider(e.target.value)}
+          />
+        </FormField>
         {error && <ErrorBanner message={error} />}
       </div>
     </Modal>

@@ -31,6 +31,7 @@ CREATE TABLE credentials (
     vault_id   TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
     key        TEXT NOT NULL,
     type       TEXT NOT NULL DEFAULT 'static',
+    pool_provider TEXT DEFAULT NULL,
     ciphertext BYTEA NOT NULL,
     nonce      BYTEA NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

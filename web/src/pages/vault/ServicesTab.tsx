@@ -35,6 +35,7 @@ interface Service {
   quota?: ServiceQuota;
   accounts?: ServiceAccount[];
   rotation?: "least_used" | "round_robin";
+  account_pool_provider?: string;
 }
 
 type SubstitutionSurface = (typeof SUBSTITUTION_SURFACES)[number];
@@ -95,6 +96,11 @@ interface CatalogTemplate {
   suggested_credential_key: string;
   header?: string;
   prefix?: string;
+}
+
+interface CredentialInfo {
+  key: string;
+  pool_provider?: string;
 }
 
 function isEnabled(service: Service): boolean {
@@ -174,7 +180,7 @@ export default function ServicesTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [catalog, setCatalog] = useState<CatalogTemplate[]>([]);
-  const [credentialKeys, setCredentialKeys] = useState<string[]>([]);
+  const [credentials, setCredentials] = useState<CredentialInfo[]>([]);
   const [quotaUsage, setQuotaUsage] = useState<Record<string, QuotaUsageService>>({});
   const presetApplied = useRef(false);
 
@@ -245,12 +251,12 @@ export default function ServicesTab() {
 
   async function fetchCredentialKeys() {
     try {
-      const data = await apiRequest<{ keys: string[] }>(
+      const data = await apiRequest<{ keys: string[]; credentials?: CredentialInfo[] }>(
         `/v1/credentials?vault=${encodeURIComponent(vaultName)}`
       );
-      setCredentialKeys(data.keys ?? []);
+      setCredentials(data.credentials ?? (data.keys ?? []).map((key) => ({ key })));
     } catch {
-      setCredentialKeys([]);
+      setCredentials([]);
     }
   }
 
@@ -618,7 +624,7 @@ export default function ServicesTab() {
           defaultAuthHeader={editingIndex === -1 ? addWithHost?.authHeader : undefined}
           defaultPreset={editingIndex === -1 && !addWithHost ? presetParam : undefined}
           catalog={catalog}
-          credentialKeys={credentialKeys}
+          credentials={credentials}
           onClose={() => {
             setEditingIndex(null);
             setAddWithHost(null);
@@ -651,7 +657,7 @@ function ServiceModal({
   defaultAuthHeader,
   defaultPreset,
   catalog,
-  credentialKeys,
+  credentials,
   onClose,
   onSave,
 }: {
@@ -663,7 +669,7 @@ function ServiceModal({
   defaultAuthHeader?: string;
   defaultPreset?: string;
   catalog: CatalogTemplate[];
-  credentialKeys: string[];
+  credentials: CredentialInfo[];
   onClose: () => void;
   onSave: (service: Service) => Promise<void>;
 }) {
@@ -698,6 +704,7 @@ function ServiceModal({
   const [quotaRPM, setQuotaRPM] = useState(initial?.quota?.rpm?.toString() ?? "");
   const [quotaConcurrency, setQuotaConcurrency] = useState(initial?.quota?.concurrency?.toString() ?? "");
   const [rotation, setRotation] = useState<"least_used" | "round_robin">(initial?.rotation ?? "least_used");
+  const [accountPoolProvider, setAccountPoolProvider] = useState(initial?.account_pool_provider ?? "");
   const [accounts, setAccounts] = useState<AccountRow[]>(() =>
     (initial?.accounts ?? []).map((account) => ({
       _id: nextRowId(),
@@ -756,6 +763,7 @@ function ServiceModal({
     setQuotaRPM("");
     setQuotaConcurrency("");
     setRotation("least_used");
+    setAccountPoolProvider("");
     setAccounts([]);
     setCustomHeaders([{ _id: nextRowId(), name: "", value: "" }]);
     setSubs([]);
@@ -813,6 +821,12 @@ function ServiceModal({
   const accountsValid = cleanedAccounts.every(
     (account) => account.id !== "" && account.credential_key !== ""
   );
+  const accountPoolProviderValid =
+    cleanedAccounts.length === 0 || accountPoolProvider.trim() !== "";
+  const accountPoolCredentialsValid = cleanedAccounts.every((account) => {
+    const credential = credentials.find((cred) => cred.key === account.credential_key);
+    return credential?.pool_provider === accountPoolProvider.trim();
+  });
   const quotaInputsValid = [
     quotaDaily,
     quotaMonthly,
@@ -856,7 +870,7 @@ function ServiceModal({
   const canSubmit = (() => {
     if (!name.trim()) return false;
     if (!pattern.trim()) return false;
-    if (!accountsValid || !quotaValid) return false;
+    if (!accountsValid || !quotaValid || !accountPoolProviderValid || !accountPoolCredentialsValid) return false;
     switch (authType) {
       case "bearer":
         return !!token.trim();
@@ -927,6 +941,7 @@ function ServiceModal({
         ...(hasQuota && { quota: quotaValues }),
         ...(cleanedAccounts.length > 0 && { accounts: cleanedAccounts }),
         ...(cleanedAccounts.length > 0 && { rotation }),
+        ...(cleanedAccounts.length > 0 && { account_pool_provider: accountPoolProvider.trim() }),
         ...(cleanedSubs.length > 0 && { substitutions: cleanedSubs }),
         ...(initial?.mail_proxy && { mail_proxy: initial.mail_proxy }),
       };
@@ -970,7 +985,7 @@ function ServiceModal({
     >
       <div className="space-y-6">
         <datalist id="service-credential-keys">
-          {credentialKeys.map((key) => (
+          {credentials.map(({ key }) => (
             <option key={key} value={key} />
           ))}
         </datalist>
@@ -1225,15 +1240,19 @@ function ServiceModal({
             quotaRPM={quotaRPM}
             quotaConcurrency={quotaConcurrency}
             rotation={rotation}
+            accountPoolProvider={accountPoolProvider}
             setQuotaDaily={setQuotaDaily}
             setQuotaMonthly={setQuotaMonthly}
             setQuotaRPM={setQuotaRPM}
             setQuotaConcurrency={setQuotaConcurrency}
             setRotation={setRotation}
+            setAccountPoolProvider={setAccountPoolProvider}
           />
 
           <AccountPoolEditor
             accounts={accounts}
+            credentials={credentials}
+            accountPoolProvider={accountPoolProvider}
             setAccounts={setAccounts}
             nextRowId={nextRowId}
           />
@@ -1246,6 +1265,16 @@ function ServiceModal({
           {!accountsValid && (
             <div className="text-xs text-danger">
               Account rows need both an id and a credential key.
+            </div>
+          )}
+          {!accountPoolProviderValid && (
+            <div className="text-xs text-danger">
+              Account pools require an account pool provider.
+            </div>
+          )}
+          {!accountPoolCredentialsValid && (
+            <div className="text-xs text-danger">
+              Account credentials must be enabled for the selected provider.
             </div>
           )}
         </CollapsibleSection>
@@ -1365,22 +1394,26 @@ function QuotaEditor({
   quotaRPM,
   quotaConcurrency,
   rotation,
+  accountPoolProvider,
   setQuotaDaily,
   setQuotaMonthly,
   setQuotaRPM,
   setQuotaConcurrency,
   setRotation,
+  setAccountPoolProvider,
 }: {
   quotaDaily: string;
   quotaMonthly: string;
   quotaRPM: string;
   quotaConcurrency: string;
   rotation: "least_used" | "round_robin";
+  accountPoolProvider: string;
   setQuotaDaily: (value: string) => void;
   setQuotaMonthly: (value: string) => void;
   setQuotaRPM: (value: string) => void;
   setQuotaConcurrency: (value: string) => void;
   setRotation: (value: "least_used" | "round_robin") => void;
+  setAccountPoolProvider: (value: string) => void;
 }) {
   return (
     <>
@@ -1436,6 +1469,17 @@ function QuotaEditor({
       </div>
 
       <FormField
+        label="Account Pool Provider"
+        tooltip="Required when accounts are configured. Only credentials with the same pool provider can be selected."
+      >
+        <Input
+          placeholder="e.g. apify"
+          value={accountPoolProvider}
+          onChange={(event) => setAccountPoolProvider(event.target.value)}
+        />
+      </FormField>
+
+      <FormField
         label="Rotation"
         tooltip="How the broker chooses between account credentials when several are available."
       >
@@ -1455,10 +1499,14 @@ function QuotaEditor({
 
 function AccountPoolEditor({
   accounts,
+  credentials,
+  accountPoolProvider,
   setAccounts,
   nextRowId,
 }: {
   accounts: AccountRow[];
+  credentials: CredentialInfo[];
+  accountPoolProvider: string;
   setAccounts: React.Dispatch<React.SetStateAction<AccountRow[]>>;
   nextRowId: () => number;
 }) {
@@ -1469,6 +1517,11 @@ function AccountPoolEditor({
       )
     );
   };
+  const poolableCredentials = credentials.filter(
+    (credential) =>
+      accountPoolProvider.trim() !== "" &&
+      credential.pool_provider === accountPoolProvider.trim()
+  );
 
   return (
     <FormField
@@ -1476,6 +1529,11 @@ function AccountPoolEditor({
       tooltip="Credential keys only. Credential values stay hidden."
     >
       <div className="space-y-3">
+        <datalist id="service-account-pool-credential-keys">
+          {poolableCredentials.map(({ key }) => (
+            <option key={key} value={key} />
+          ))}
+        </datalist>
         {accounts.map((account, index) => (
           <div
             key={account._id}
@@ -1489,7 +1547,7 @@ function AccountPoolEditor({
               />
               <Input
                 placeholder="Credential key"
-                list="service-credential-keys"
+                list="service-account-pool-credential-keys"
                 value={account.credential_key}
                 onChange={(event) =>
                   updateAccount(index, { credential_key: event.target.value })

@@ -464,7 +464,7 @@ func copyVaultGrants(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect 
 
 func copyCredentials(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect Dialect) (int, error) {
 	rows, err := src.db.QueryContext(ctx,
-		"SELECT id, vault_id, key, type, ciphertext, nonce, created_at, updated_at FROM credentials")
+		"SELECT id, vault_id, key, type, pool_provider, ciphertext, nonce, created_at, updated_at FROM credentials")
 	if err != nil {
 		return 0, err
 	}
@@ -473,9 +473,10 @@ func copyCredentials(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect 
 	n := 0
 	for rows.Next() {
 		var id, vaultID, key, typ string
+		var poolProvider sql.NullString
 		var ct, nonce []byte
 		var createdAt, updatedAt interface{}
-		if err := rows.Scan(&id, &vaultID, &key, &typ, &ct, &nonce, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &vaultID, &key, &typ, &poolProvider, &ct, &nonce, &createdAt, &updatedAt); err != nil {
 			return n, err
 		}
 		ca, err := convertTime(createdAt, src.dialect, dstDialect)
@@ -487,8 +488,8 @@ func copyCredentials(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect 
 			return n, fmt.Errorf("converting updated_at: %w", err)
 		}
 		_, err = tx.ExecContext(ctx,
-			dstDialect.Rebind("INSERT INTO credentials (id, vault_id, key, type, ciphertext, nonce, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
-			id, vaultID, key, typ, ct, nonce, ca, ua,
+			dstDialect.Rebind("INSERT INTO credentials (id, vault_id, key, type, pool_provider, ciphertext, nonce, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+			id, vaultID, key, typ, nullableString(poolProvider.String), ct, nonce, ca, ua,
 		)
 		if err != nil {
 			return n, err

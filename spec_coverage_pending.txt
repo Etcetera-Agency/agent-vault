@@ -126,6 +126,22 @@ Completed:
 Pending:
 - None for `fix-quota-account-identity`; ready to archive.
 
+add-credential-pool-eligibility coverage
+
+Completed:
+- Credentials store non-secret `pool_provider` metadata with migration and SQL read/update support.
+- Credential API lists `pool_provider` and supports metadata-only updates without decrypting or rewriting credential values.
+- Service config and responses carry `account_pool_provider`.
+- Account-pool service saves require `account_pool_provider` and matching credential `pool_provider`.
+- Credentials without `pool_provider` remain unpoolable by default, including OAuth/mail-proxy-style credentials.
+- Credentials UI shows pool state and lets admins set or clear pool provider metadata.
+- Services UI requires a provider for account pools, filters account credential choices, and blocks mismatches.
+- TypeScript SDK types expose credential pool metadata and service account-pool provider fields.
+- Docs describe explicit credential pool opt-in.
+
+Pending:
+- None for `add-credential-pool-eligibility`; ready to archive.
+
 add-quota-ui coverage
 
 Completed:
