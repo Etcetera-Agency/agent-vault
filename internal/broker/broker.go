@@ -39,6 +39,26 @@ type Service struct {
 	Methods []string `yaml:"methods,omitempty" json:"methods,omitempty"`
 	// AICODE-NOTE: MailProxy is policy only; no secrets live here. Runtime resolves named credentials.
 	MailProxy *MailProxyPolicy `yaml:"mail_proxy,omitempty" json:"mail_proxy,omitempty"`
+	// fork-local: Egress quota config is policy only here; runtime enforcement lives in internal/egressquota.
+	Quota    *ServiceQuota    `yaml:"quota,omitempty" json:"quota,omitempty"`
+	Accounts []ServiceAccount `yaml:"accounts,omitempty" json:"accounts,omitempty"`
+	Rotation string           `yaml:"rotation,omitempty" json:"rotation,omitempty"`
+}
+
+// AICODE-NOTE: Account CredentialKey is a reference only; service config must never carry credential values.
+type ServiceQuota struct {
+	DailyCap    *int `yaml:"daily_cap,omitempty" json:"daily_cap,omitempty"`
+	MonthlyCap  *int `yaml:"monthly_cap,omitempty" json:"monthly_cap,omitempty"`
+	RPM         *int `yaml:"rpm,omitempty" json:"rpm,omitempty"`
+	Concurrency *int `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+}
+
+type ServiceAccount struct {
+	ID            string `yaml:"id" json:"id"`
+	CredentialKey string `yaml:"credential_key" json:"credential_key"`
+	DailyCap      *int   `yaml:"daily_cap,omitempty" json:"daily_cap,omitempty"`
+	MonthlyCap    *int   `yaml:"monthly_cap,omitempty" json:"monthly_cap,omitempty"`
+	RPM           *int   `yaml:"rpm,omitempty" json:"rpm,omitempty"`
 }
 
 type MailProxyPolicy struct {
@@ -387,12 +407,80 @@ func Validate(cfg *Config) error {
 		if err := NormalizeMethods(&cfg.Services[i]); err != nil {
 			return fmt.Errorf("service %d: %w", i, err)
 		}
+		if err := s.ValidateQuotaConfig(); err != nil {
+			return fmt.Errorf("service %d: %w", i, err)
+		}
 		if err := s.Auth.Validate(); err != nil {
 			return fmt.Errorf("service %d: %w", i, err)
 		}
 		if err := s.ValidateSubstitutions(); err != nil {
 			return fmt.Errorf("service %d: %w", i, err)
 		}
+	}
+	return nil
+}
+
+// ValidateQuotaConfig checks optional egress quota/account policy shape.
+// Credential-key existence is validated by management API callers that know the vault.
+func (s *Service) ValidateQuotaConfig() error {
+	if s.Quota != nil {
+		if err := s.Quota.validate("quota"); err != nil {
+			return err
+		}
+	}
+	switch s.Rotation {
+	case "", "least_used", "round_robin":
+	default:
+		return fmt.Errorf("rotation %q must be one of least_used, round_robin", s.Rotation)
+	}
+	seen := make(map[string]int, len(s.Accounts))
+	for i, acct := range s.Accounts {
+		if acct.ID == "" {
+			return fmt.Errorf("account %d: id is required", i)
+		}
+		if prev, dup := seen[acct.ID]; dup {
+			return fmt.Errorf("account %d: duplicate id %q (also at account %d)", i, acct.ID, prev)
+		}
+		seen[acct.ID] = i
+		if acct.CredentialKey == "" {
+			return fmt.Errorf("account %d: credential_key is required", i)
+		}
+		if err := validateCredentialKey("credential_key", acct.CredentialKey); err != nil {
+			return fmt.Errorf("account %d: %w", i, err)
+		}
+		quota := ServiceQuota{
+			DailyCap:   acct.DailyCap,
+			MonthlyCap: acct.MonthlyCap,
+			RPM:        acct.RPM,
+		}
+		if err := quota.validate(fmt.Sprintf("account %d", i)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (q ServiceQuota) validate(prefix string) error {
+	checkNonNegative := func(name string, value *int) error {
+		if value != nil && *value < 0 {
+			return fmt.Errorf("%s.%s must be non-negative", prefix, name)
+		}
+		return nil
+	}
+	if err := checkNonNegative("daily_cap", q.DailyCap); err != nil {
+		return err
+	}
+	if err := checkNonNegative("monthly_cap", q.MonthlyCap); err != nil {
+		return err
+	}
+	if err := checkNonNegative("rpm", q.RPM); err != nil {
+		return err
+	}
+	if err := checkNonNegative("concurrency", q.Concurrency); err != nil {
+		return err
+	}
+	if q.DailyCap != nil && q.MonthlyCap != nil && *q.MonthlyCap < *q.DailyCap {
+		return fmt.Errorf("%s.monthly_cap must be greater than or equal to daily_cap", prefix)
 	}
 	return nil
 }
@@ -497,11 +585,11 @@ func (s *Substitution) NormalizedIn() []string {
 // auth and substitutions, deduplicated, auth keys first.
 func (s *Service) CredentialKeys() []string {
 	authKeys := s.Auth.CredentialKeys()
-	if len(s.Substitutions) == 0 {
+	if len(s.Substitutions) == 0 && len(s.Accounts) == 0 {
 		return authKeys
 	}
-	seen := make(map[string]bool, len(authKeys)+len(s.Substitutions))
-	out := make([]string, 0, len(authKeys)+len(s.Substitutions))
+	seen := make(map[string]bool, len(authKeys)+len(s.Substitutions)+len(s.Accounts))
+	out := make([]string, 0, len(authKeys)+len(s.Substitutions)+len(s.Accounts))
 	for _, k := range authKeys {
 		if !seen[k] {
 			seen[k] = true
@@ -512,6 +600,12 @@ func (s *Service) CredentialKeys() []string {
 		if !seen[sub.Key] {
 			seen[sub.Key] = true
 			out = append(out, sub.Key)
+		}
+	}
+	for _, acct := range s.Accounts {
+		if acct.CredentialKey != "" && !seen[acct.CredentialKey] {
+			seen[acct.CredentialKey] = true
+			out = append(out, acct.CredentialKey)
 		}
 	}
 	return out

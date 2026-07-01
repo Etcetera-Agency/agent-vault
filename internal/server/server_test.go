@@ -389,9 +389,9 @@ func (m *mockStore) ExpirePendingProposals(_ context.Context, before time.Time) 
 	return 0, nil
 }
 
-func (m *mockStore) Close() error                                     { return nil }
-func (m *mockStore) Ping(_ context.Context) error                      { return nil }
-func (m *mockStore) DialectName() string                               { return "sqlite" }
+func (m *mockStore) Close() error                                         { return nil }
+func (m *mockStore) Ping(_ context.Context) error                         { return nil }
+func (m *mockStore) DialectName() string                                  { return "sqlite" }
 func (m *mockStore) GetCAState(_ context.Context) (*store.CAState, error) { return nil, nil }
 func (m *mockStore) SetCAState(_ context.Context, _ *store.CAState) error { return nil }
 
@@ -5950,6 +5950,92 @@ func TestServicesUpsertRoundTripsMethods(t *testing.T) {
 	}
 	if want := []string{"GET", "HEAD"}; !slices.Equal(resp.Services[0].Methods, want) {
 		t.Fatalf("methods = %v, want %v", resp.Services[0].Methods, want)
+	}
+}
+
+func TestServicesUpsertRoundTripsQuotaConfig(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	ms.credentials["root-ns-id:APIFY_TOKEN_1"] = &store.Credential{ID: "c1", VaultID: "root-ns-id", Key: "APIFY_TOKEN_1"}
+	ms.credentials["root-ns-id:APIFY_TOKEN_2"] = &store.Credential{ID: "c2", VaultID: "root-ns-id", Key: "APIFY_TOKEN_2"}
+	srv := newTestServer(withStore(ms))
+
+	body := `{"services":[{"name":"apify","host":"api.apify.com","auth":{"type":"bearer","token":"APIFY_TOKEN_1"},"quota":{"daily_cap":5000,"monthly_cap":100000,"rpm":60,"concurrency":4},"rotation":"least_used","accounts":[{"id":"acct1","credential_key":"APIFY_TOKEN_1","daily_cap":5000},{"id":"acct2","credential_key":"APIFY_TOKEN_2","monthly_cap":80000}]}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/vaults/default/services", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/vaults/default/services", nil)
+	getReq.Header.Set("Authorization", "Bearer "+token)
+	getRec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+
+	var resp struct {
+		Services []struct {
+			Quota struct {
+				DailyCap    int `json:"daily_cap"`
+				MonthlyCap  int `json:"monthly_cap"`
+				RPM         int `json:"rpm"`
+				Concurrency int `json:"concurrency"`
+			} `json:"quota"`
+			Rotation string `json:"rotation"`
+			Accounts []struct {
+				ID            string `json:"id"`
+				CredentialKey string `json:"credential_key"`
+				DailyCap      int    `json:"daily_cap,omitempty"`
+				MonthlyCap    int    `json:"monthly_cap,omitempty"`
+			} `json:"accounts"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode GET response: %v", err)
+	}
+	if len(resp.Services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(resp.Services))
+	}
+	got := resp.Services[0]
+	if got.Quota.DailyCap != 5000 || got.Quota.MonthlyCap != 100000 || got.Quota.RPM != 60 || got.Quota.Concurrency != 4 {
+		t.Fatalf("quota did not round-trip: %+v", got.Quota)
+	}
+	if got.Rotation != "least_used" {
+		t.Fatalf("rotation = %q, want least_used", got.Rotation)
+	}
+	if len(got.Accounts) != 2 || got.Accounts[1].CredentialKey != "APIFY_TOKEN_2" || got.Accounts[1].MonthlyCap != 80000 {
+		t.Fatalf("accounts did not round-trip: %+v", got.Accounts)
+	}
+	if strings.Contains(getRec.Body.String(), "secret") {
+		t.Fatalf("response leaked credential value: %s", getRec.Body.String())
+	}
+}
+
+func TestServicesUpsertRejectsUnknownQuotaAccountCredential(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	ms.brokerConfigs["root-ns-id"] = &store.BrokerConfig{
+		ID: "bc-1", VaultID: "root-ns-id",
+		ServicesJSON: `[{"name":"stripe","host":"api.stripe.com","auth":{"type":"bearer","token":"STRIPE_KEY"}}]`,
+	}
+	srv := newTestServer(withStore(ms))
+
+	body := `{"services":[{"name":"apify","host":"api.apify.com","auth":{"type":"bearer","token":"APIFY_TOKEN_1"},"accounts":[{"id":"acct1","credential_key":"MISSING_TOKEN"}]}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/vaults/default/services", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "MISSING_TOKEN") {
+		t.Fatalf("expected missing credential error, got %s", rec.Body.String())
+	}
+	if ms.brokerConfigs["root-ns-id"].ServicesJSON != `[{"name":"stripe","host":"api.stripe.com","auth":{"type":"bearer","token":"STRIPE_KEY"}}]` {
+		t.Fatalf("stored services changed after invalid update: %s", ms.brokerConfigs["root-ns-id"].ServicesJSON)
 	}
 }
 

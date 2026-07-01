@@ -260,6 +260,9 @@ type serviceResponse struct {
 	Substitutions []broker.Substitution   `json:"substitutions,omitempty"`
 	Methods       []string                `json:"methods"`
 	MailProxy     *broker.MailProxyPolicy `json:"mail_proxy,omitempty"`
+	Quota         *broker.ServiceQuota    `json:"quota,omitempty"`
+	Accounts      []broker.ServiceAccount `json:"accounts,omitempty"`
+	Rotation      string                  `json:"rotation,omitempty"`
 }
 
 func serviceResponses(services []broker.Service) []serviceResponse {
@@ -273,9 +276,42 @@ func serviceResponses(services []broker.Service) []serviceResponse {
 			Substitutions: svc.Substitutions,
 			Methods:       broker.DisplayMethods(svc.Methods),
 			MailProxy:     svc.MailProxy,
+			Quota:         svc.Quota,
+			Accounts:      svc.Accounts,
+			Rotation:      svc.Rotation,
 		}
 	}
 	return out
+}
+
+func (s *Server) validateServiceAccountCredentialRefs(ctx context.Context, vaultID string, services []broker.Service) error {
+	hasAccounts := false
+	for _, svc := range services {
+		if len(svc.Accounts) > 0 {
+			hasAccounts = true
+			break
+		}
+	}
+	if !hasAccounts {
+		return nil
+	}
+
+	creds, err := s.store.ListCredentials(ctx, vaultID)
+	if err != nil {
+		return fmt.Errorf("load credential keys: %w", err)
+	}
+	existing := make(map[string]bool, len(creds))
+	for _, cred := range creds {
+		existing[cred.Key] = true
+	}
+	for i, svc := range services {
+		for j, acct := range svc.Accounts {
+			if !existing[acct.CredentialKey] {
+				return fmt.Errorf("service %d account %d: credential_key %q does not exist", i, j, acct.CredentialKey)
+			}
+		}
+	}
+	return nil
 }
 
 func toCandidateRefs(svcs []broker.Service) []candidateRef {
@@ -427,6 +463,10 @@ func (s *Server) handleServicesUpsert(w http.ResponseWriter, r *http.Request) {
 
 	incoming := broker.Config{Vault: name, Services: incomingSlice}
 	if err := broker.Validate(&incoming); err != nil {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("Invalid services: %v", err))
+		return
+	}
+	if err := s.validateServiceAccountCredentialRefs(ctx, ns.ID, incomingSlice); err != nil {
 		jsonError(w, http.StatusBadRequest, fmt.Sprintf("Invalid services: %v", err))
 		return
 	}
@@ -665,6 +705,10 @@ func (s *Server) handleServicesSet(w http.ResponseWriter, r *http.Request) {
 	services = splitInlineHosts(services)
 	cfg := broker.Config{Vault: name, Services: services}
 	if err := broker.Validate(&cfg); err != nil {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("Invalid services: %v", err))
+		return
+	}
+	if err := s.validateServiceAccountCredentialRefs(ctx, ns.ID, services); err != nil {
 		jsonError(w, http.StatusBadRequest, fmt.Sprintf("Invalid services: %v", err))
 		return
 	}

@@ -70,3 +70,17 @@ Completed:
 
 Pending:
 - None for `fix-mail-proxy-review-gaps`; change archived on 2026-07-01.
+
+add-service-quota-config coverage
+
+Completed:
+- Service schema carries optional `quota`, `accounts`, and `rotation` fields.
+- Service POST/PUT round-trips full and partial quota/account config without dropping existing service fields.
+- Validation rejects negative quota values, `monthly_cap < daily_cap`, duplicate account ids, invalid rotation, and account `credential_key` refs missing from the vault.
+- GET service responses return credential keys only and never credential values for account pools.
+- Docs describe optional quota/account config and note enforcement arrives in later slices.
+
+Pending:
+- Runtime quota enforcement remains in `enforce-egress-quota`.
+- Multi-account rotation and upstream failover remain in `add-credential-rotation`.
+- UI editing and usage display remain in `add-quota-ui`.
