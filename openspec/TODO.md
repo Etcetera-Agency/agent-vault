@@ -9,7 +9,8 @@
 5. Verify Google OAuth handling before profile use: decide between static access token, OAuth credential stored in Agent Vault, or external refresh process.
 6. Add OAuth-backed Google credential refresh support as a separate Agent Vault spec if static `GOOGLE_ACCESS_TOKEN` is insufficient.
 7. Add response redaction policy as a separate Agent Vault spec if request logs or upstream responses expose sensitive payload fields beyond credential values.
+8. Add remote-listen support for `agent-vault mail-proxy` only after the loopback-only MVP works. Remote support must require explicit opt-in, local TLS, clear CA trust setup for Hermes, and tests for rejecting remote plaintext.
 ## Resolved
 
-8. ~~Decide how `/discover` represents unrestricted methods.~~ **Resolved: canonical `["*"]`.** Storage keeps unrestricted as empty/omitted (backward compatible); `["*"]` is accepted on input as the sole-element alias (normalized to empty) and rendered on every surface — `/discover`, service list, CLI, UI, docs. Captured in `add-service-method-field` and `surface-service-methods`.
-9. ~~Decide UI copy for unrestricted method policy.~~ **Resolved: show the `["*"]` token** as the badge/value, with an `Any method` tooltip/label for readability.
+9. ~~Decide how `/discover` represents unrestricted methods.~~ **Resolved: canonical `["*"]`.** Storage keeps unrestricted as empty/omitted (backward compatible); `["*"]` is accepted on input as the sole-element alias (normalized to empty) and rendered on every surface — `/discover`, service list, CLI, UI, docs. Captured in `add-service-method-field` and `surface-service-methods`.
+10. ~~Decide UI copy for unrestricted method policy.~~ **Resolved: show the `["*"]` token** as the badge/value, with an `Any method` tooltip/label for readability.

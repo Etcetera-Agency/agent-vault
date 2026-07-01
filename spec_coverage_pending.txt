@@ -1,0 +1,20 @@
+add-hermes-gmail-mail-proxy pending coverage
+
+Completed:
+- Shared OAuth access token resolver:
+  - valid token returned without refresh
+  - five-minute-buffer refresh
+  - rotated refresh token persistence
+  - refresh error persistence
+  - forced refresh
+  - HTTP broker reuse of shared resolver
+
+Pending:
+- mail_proxy service allowlist parsing, validation, preservation, listing
+- mail-proxy command config and preflight validation
+- local Agent Vault CA TLS and local password auth
+- Gmail XOAUTH2 payload helpers and forced-refresh retry wrappers
+- IMAP proxy parser, upstream XOAUTH2 auth, relay, cleanup
+- SMTP proxy STARTTLS/auth, upstream XOAUTH2 auth, relay, cleanup
+- shutdown lifecycle and docs
+- final full relevant suite and OpenSpec strict validation before archive

@@ -1,0 +1,11 @@
+# Completion Review
+
+## Slice 2: Shared OAuth Resolver
+
+- Extracted OAuth refresh logic into `internal/oauthcredential.Resolver`.
+- Added focused resolver tests for no-refresh, buffered refresh, refresh-token rotation, refresh error persistence, and forced refresh.
+- Updated broker OAuth credential resolution to reuse the shared resolver.
+- Fixed broker error wrapping so OAuth refresh failures remain discoverable by `errors.Is` after credential-resolution wrapping.
+
+Verification:
+- `/usr/local/bin/go test ./internal/oauthcredential ./internal/brokercore`
