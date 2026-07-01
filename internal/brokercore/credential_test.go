@@ -9,6 +9,7 @@ import (
 
 	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/crypto"
+	"github.com/Infisical/agent-vault/internal/egressquota"
 	"github.com/Infisical/agent-vault/internal/store"
 )
 
@@ -69,6 +70,8 @@ func make32(b byte) []byte {
 	return k
 }
 
+func intPtr(v int) *int { return &v }
+
 func (f *fakeCredStore) setCred(t *testing.T, key32 []byte, vaultID, key, plaintext string) {
 	t.Helper()
 	ct, nonce, err := crypto.Encrypt([]byte(plaintext), key32)
@@ -105,6 +108,32 @@ func TestInject_BearerHappyPath(t *testing.T) {
 	}
 	if res.Headers["Authorization"] != "Bearer s3cret" {
 		t.Fatalf("got Authorization=%q", res.Headers["Authorization"])
+	}
+}
+
+func TestInject_EgressQuotaDeniesBeforeCredentialLookup(t *testing.T) {
+	key32 := make32(0x12)
+	f := newFakeCredStore()
+	f.setServices(t, "v1", []broker.Service{{
+		Name:  "apify",
+		Host:  "api.apify.com",
+		Auth:  broker.Auth{Type: "bearer", Token: "APIFY_TOKEN"},
+		Quota: &broker.ServiceQuota{DailyCap: intPtr(0)},
+	}})
+	f.setCred(t, key32, "v1", "APIFY_TOKEN", "secret")
+
+	p := NewStoreCredentialProvider(f, key32)
+	p.Quota = egressquota.New()
+	res, err := p.Inject(context.Background(), "v1", "api.apify.com", 0, "GET", "/")
+	var quotaErr *ErrEgressQuotaExceeded
+	if !errors.As(err, &quotaErr) {
+		t.Fatalf("expected ErrEgressQuotaExceeded, got %v", err)
+	}
+	if res == nil || res.MatchedName != "apify" {
+		t.Fatalf("expected matched metadata, got %+v", res)
+	}
+	if f.getCredentialCalls != 0 {
+		t.Fatalf("credential lookups = %d, want 0", f.getCredentialCalls)
 	}
 }
 

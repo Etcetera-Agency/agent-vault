@@ -11,6 +11,7 @@ import (
 
 	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/crypto"
+	"github.com/Infisical/agent-vault/internal/egressquota"
 	"github.com/Infisical/agent-vault/internal/oauth"
 	"github.com/Infisical/agent-vault/internal/oauthcredential"
 	"github.com/Infisical/agent-vault/internal/store"
@@ -57,6 +58,8 @@ type InjectResult struct {
 	// Passthrough is set when no service matched but the unmatched-host
 	// policy permitted forwarding.
 	Passthrough bool
+
+	QuotaReservation *egressquota.Reservation
 }
 
 // CredentialProvider resolves a service for (targetHost, targetMethod,
@@ -96,6 +99,7 @@ type StoreCredentialProvider struct {
 	EncKey     []byte
 	Refresher  *oauth.Refresher          // nil = no OAuth refresh
 	Dynamic    DynamicCredentialResolver // nil = no dynamic-secret resolution
+	Quota      *egressquota.Registry     // nil = no egress quota enforcement
 }
 
 // NewStoreCredentialProvider constructs a provider. encKey must be 32 bytes.
@@ -167,6 +171,21 @@ func (p *StoreCredentialProvider) Inject(ctx context.Context, vaultID, targetHos
 		slog.Int("decl_order", score.DeclOrder),
 	)
 
+	var quotaReservation *egressquota.Reservation
+	if p.Quota != nil {
+		reservation, denial := p.Quota.Reserve(ctx, vaultID, *matched)
+		if denial != nil {
+			return &InjectResult{
+				MatchedName:    matched.Name,
+				MatchedHost:    matched.Host,
+				MatchedPath:    matched.Path,
+				MatchedPort:    matched.Port,
+				CredentialKeys: matched.CredentialKeys(),
+			}, &ErrEgressQuotaExceeded{Decision: denial}
+		}
+		quotaReservation = reservation
+	}
+
 	// Memoize per-key lookups so a credential shared by auth and a
 	// substitution decrypts only once.
 	cache := make(map[string]string)
@@ -213,11 +232,12 @@ func (p *StoreCredentialProvider) Inject(ctx context.Context, vaultID, targetHos
 	// Capture non-secret metadata up front so a downstream credential-missing
 	// error still carries it for diagnostic logging.
 	result := &InjectResult{
-		MatchedName:    matched.Name,
-		MatchedHost:    matched.Host,
-		MatchedPath:    matched.Path,
-		MatchedPort:    matched.Port,
-		CredentialKeys: matched.CredentialKeys(),
+		MatchedName:      matched.Name,
+		MatchedHost:      matched.Host,
+		MatchedPath:      matched.Path,
+		MatchedPort:      matched.Port,
+		CredentialKeys:   matched.CredentialKeys(),
+		QuotaReservation: quotaReservation,
 	}
 
 	// Resolve substitutions before auth so passthrough services (which

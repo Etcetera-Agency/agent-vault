@@ -1,6 +1,10 @@
 package brokercore
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/Infisical/agent-vault/internal/egressquota"
+)
 
 var (
 	// ErrInvalidSession means the supplied session token is missing, unknown,
@@ -55,3 +59,11 @@ var (
 	// and the automatic refresh attempt failed.
 	ErrOAuthRefreshFailed = errors.New("brokercore: oauth token refresh failed")
 )
+
+type ErrEgressQuotaExceeded struct {
+	Decision *egressquota.Decision
+}
+
+func (e *ErrEgressQuotaExceeded) Error() string {
+	return "brokercore: egress quota exceeded"
+}

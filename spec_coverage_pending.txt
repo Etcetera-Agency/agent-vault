@@ -84,3 +84,17 @@ Pending:
 - Runtime quota enforcement remains in `enforce-egress-quota`.
 - Multi-account rotation and upstream failover remain in `add-credential-rotation`.
 - UI editing and usage display remain in `add-quota-ui`.
+
+enforce-egress-quota coverage
+
+Completed:
+- `internal/egressquota.Registry` enforces per-service implicit-account daily/monthly caps, rpm, and concurrency.
+- Counters seed from request logs at server startup and reconcile periodically.
+- MITM credential injection denies before secret lookup/injection when quota is exhausted.
+- Quota denial returns HTTP 429 with `X-Vault-Quota-Exhausted` and `Retry-After`.
+- Forwarded upstream responses increment day/month counters and release concurrency slots.
+- Docs describe provider-side ceilings plus Agent Vault quota guardrails.
+
+Pending:
+- Multi-account rotation, cooldown, upstream 429 failover, and exhaustion alerts remain in `add-credential-rotation`.
+- UI editing and usage display remain in `add-quota-ui`.

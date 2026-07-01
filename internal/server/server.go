@@ -21,6 +21,7 @@ import (
 
 	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/crypto"
+	"github.com/Infisical/agent-vault/internal/egressquota"
 	"github.com/Infisical/agent-vault/internal/infisical"
 	"github.com/Infisical/agent-vault/internal/mitm"
 	"github.com/Infisical/agent-vault/internal/netguard"
@@ -59,18 +60,19 @@ type agentVaultJSON struct {
 
 // Server is the Agent Vault HTTP server.
 type Server struct {
-	httpServer  *http.Server
-	store       Store
-	encKey      []byte // 32-byte encryption key, held in memory while running
-	notifier    *notify.Notifier
-	initialized    bool                // true when at least one owner account exists
-	lastInitCheck  atomic.Int64        // unix-millis of last DB check for initialization (throttle)
-	baseURL     string              // externally-reachable base URL (e.g. "https://sb.example.com")
-	skillCLI    []byte              // embedded CLI skill content (served at GET /v1/skills/cli)
-	mitm        *mitm.Proxy         // transparent MITM proxy; nil only when --mitm-port 0
-	logger      *slog.Logger        // structured logger for per-request observability
-	rateLimit   *ratelimit.Registry // tiered rate limiter; shared with the MITM ingress
-	logSink     requestlog.Sink     // per-request persistence sink; never nil (Nop default)
+	httpServer    *http.Server
+	store         Store
+	encKey        []byte // 32-byte encryption key, held in memory while running
+	notifier      *notify.Notifier
+	initialized   bool                  // true when at least one owner account exists
+	lastInitCheck atomic.Int64          // unix-millis of last DB check for initialization (throttle)
+	baseURL       string                // externally-reachable base URL (e.g. "https://sb.example.com")
+	skillCLI      []byte                // embedded CLI skill content (served at GET /v1/skills/cli)
+	mitm          *mitm.Proxy           // transparent MITM proxy; nil only when --mitm-port 0
+	logger        *slog.Logger          // structured logger for per-request observability
+	rateLimit     *ratelimit.Registry   // tiered rate limiter; shared with the MITM ingress
+	egressQuota   *egressquota.Registry // per-service egress quota counters; shared with MITM providers
+	logSink       requestlog.Sink       // per-request persistence sink; never nil (Nop default)
 	// touchCache short-circuits per-request session-touch writes. With
 	// db.SetMaxOpenConns(1), every UPDATE — even a no-op — opens the
 	// single WAL writer slot. Caching the last-touch wall-clock per
@@ -100,6 +102,8 @@ func (s *Server) lockVaultServices(ctx context.Context, vaultID string) (func(),
 // RateLimit returns the server's rate-limit registry. Exported so the
 // MITM ingress can share the same tier state (see cmd/server.go).
 func (s *Server) RateLimit() *ratelimit.Registry { return s.rateLimit }
+
+func (s *Server) EgressQuota() *egressquota.Registry { return s.egressQuota }
 
 // AttachMITM registers an optional transparent MITM proxy whose lifecycle
 // is bound to this Server: Start launches it, and SIGINT/SIGTERM/Shutdown
@@ -187,6 +191,7 @@ func (s *Server) CredentialProvider() brokercore.CredentialProvider {
 		OAuthStore: credentialStoreAdapter{s.store},
 		EncKey:     s.encKey,
 		Refresher:  s.oauthRefresher,
+		Quota:      s.egressQuota,
 	}
 	// Late-bind via an adapter: the MITM proxy captures this provider at attach
 	// time, before Start() builds s.infisicalDynamic. The adapter reads the
@@ -785,8 +790,12 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 		baseURL:        strings.TrimRight(baseURL, "/"),
 		logger:         logger,
 		rateLimit:      rl,
+		egressQuota:    egressquota.New(),
 		logSink:        requestlog.Nop{},
 		oauthRefresher: oauth.NewRefresher(),
+	}
+	if err := s.egressQuota.SeedFromRequestLogs(context.Background(), store, 10000); err != nil && logger != nil {
+		logger.Warn("egress quota seed failed", slog.String("err", err.Error()))
 	}
 
 	// Apply SSRF protection to OAuth token endpoint requests.

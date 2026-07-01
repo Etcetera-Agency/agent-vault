@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Infisical/agent-vault/internal/brokercore"
+	"github.com/Infisical/agent-vault/internal/egressquota"
 	"github.com/Infisical/agent-vault/internal/ratelimit"
 	"github.com/Infisical/agent-vault/internal/requestlog"
 )
@@ -248,6 +249,15 @@ func (p *Proxy) forwardRequest(
 		event.Passthrough = inject.Passthrough
 	}
 	if err != nil {
+		var quotaErr *brokercore.ErrEgressQuotaExceeded
+		if errors.As(err, &quotaErr) {
+			egressquota.WriteDenial(w, quotaErr.Decision)
+			emit(http.StatusTooManyRequests, "quota_exhausted")
+			return
+		}
+		if inject != nil && inject.QuotaReservation != nil {
+			inject.QuotaReservation.Release()
+		}
 		errCode := "no_match"
 		status := http.StatusForbidden
 		if errors.Is(err, brokercore.ErrCredentialMissing) {
@@ -258,6 +268,9 @@ func (p *Proxy) forwardRequest(
 		brokercore.WriteInjectError(w, err, target, scope.VaultName, p.baseURL)
 		emit(status, errCode)
 		return
+	}
+	if inject.QuotaReservation != nil {
+		defer inject.QuotaReservation.Release()
 	}
 
 	var body io.ReadCloser
@@ -373,6 +386,9 @@ func (p *Proxy) forwardRequest(
 	}
 
 	defer func() { _ = resp.Body.Close() }()
+	if inject.QuotaReservation != nil {
+		inject.QuotaReservation.Commit(resp.StatusCode)
+	}
 
 	if p.maxResponseBytes > 0 && resp.ContentLength > 0 && resp.ContentLength > p.maxResponseBytes {
 		_ = resp.Body.Close()
@@ -388,7 +404,6 @@ func (p *Proxy) forwardRequest(
 		emit(http.StatusBadGateway, "response_too_large")
 		return
 	}
-
 	for k, vv := range resp.Header {
 		if brokercore.ShouldStripResponseHeader(k) {
 			continue
