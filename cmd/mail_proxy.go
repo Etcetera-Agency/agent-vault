@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/Infisical/agent-vault/internal/ca"
 	"github.com/Infisical/agent-vault/internal/mailproxy"
 	"github.com/Infisical/agent-vault/internal/store"
 	"github.com/spf13/cobra"
@@ -27,7 +28,8 @@ var mailProxyCmd = &cobra.Command{
 		}
 		defer cleanup()
 
-		if _, err := mailproxy.Preflight(context.Background(), db, cfg.Config); err != nil {
+		preflight, err := mailproxy.Preflight(context.Background(), db, cfg.Config)
+		if err != nil {
 			return err
 		}
 
@@ -36,6 +38,32 @@ var mailProxyCmd = &cobra.Command{
 			return err
 		}
 		defer masterKey.Wipe()
+
+		localPassword, err := mailproxy.LoadLocalPassword(
+			context.Background(),
+			db,
+			preflight.VaultID,
+			preflight.Service.MailProxy.LocalPasswordCredential,
+			masterKey.Key(),
+		)
+		if err != nil {
+			return err
+		}
+		if _, err := mailproxy.NewLocalAuthenticator(preflight.Service.MailProxy.Email, localPassword); err != nil {
+			return err
+		}
+
+		caOpts := ca.Options{}
+		if db.DialectName() == "postgres" {
+			caOpts.Store = &caStoreAdapter{db: db}
+		}
+		caProvider, err := ca.New(masterKey.Key(), caOpts)
+		if err != nil {
+			return fmt.Errorf("initializing local CA: %w", err)
+		}
+		if _, err := mailproxy.LocalTLSConfig(caProvider); err != nil {
+			return err
+		}
 
 		return fmt.Errorf("mail proxy listeners are not implemented yet")
 	},

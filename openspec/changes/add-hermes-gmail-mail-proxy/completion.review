@@ -20,3 +20,13 @@ Verification:
 Verification:
 - `/usr/local/bin/go test ./internal/mailproxy ./internal/broker ./internal/server ./cmd`
 - `npm run build --prefix web`
+
+## Slice 4: Local TLS And Auth
+
+- Added local TLS config and IMAP/SMTP TLS wrappers backed by Agent Vault CA leaf certs for `127.0.0.1`.
+- Added SMTP local capabilities including `STARTTLS`.
+- Added static local password credential decryption and local authenticator with hashed constant-length password comparison.
+- Wired `agent-vault mail-proxy` pre-listener setup through local password load, authenticator creation, CA init, and TLS config minting.
+
+Verification:
+- `/usr/local/bin/go test ./internal/mailproxy ./cmd`

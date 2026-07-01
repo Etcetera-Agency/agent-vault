@@ -26,11 +26,11 @@
 
 ## 4. Local TLS And Auth
 
-- [ ] 4.1 Add failing tests that local IMAP requires implicit TLS and local SMTP advertises/upgrades STARTTLS.
-- [ ] 4.2 Add failing tests for constant-time password verification behavior, empty password rejection, and generic auth failure messages.
-- [ ] 4.3 Wire `internal/ca.New` and `MintLeaf("127.0.0.1")` into mail-proxy local TLS config.
-- [ ] 4.4 Implement local password loading from an existing static Agent Vault credential.
-- [ ] 4.5 Run TLS/auth tests.
+- [x] 4.1 Add failing tests that local IMAP requires implicit TLS and local SMTP advertises/upgrades STARTTLS.
+- [x] 4.2 Add failing tests for constant-time password verification behavior, empty password rejection, and generic auth failure messages.
+- [x] 4.3 Wire `internal/ca.New` and `MintLeaf("127.0.0.1")` into mail-proxy local TLS config.
+- [x] 4.4 Implement local password loading from an existing static Agent Vault credential.
+- [x] 4.5 Run TLS/auth tests.
 
 ## 5. XOAUTH2 Helpers
 

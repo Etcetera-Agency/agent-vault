@@ -19,9 +19,16 @@ Completed:
   - disabled service and both-protocols-disabled rejection
   - connected OAuth credential and refresh-token preflight
   - local password credential preflight
+- Local TLS and auth:
+  - Agent Vault CA mints 127.0.0.1 local TLS leaf
+  - IMAP implicit TLS wrapper handshakes with trusted CA
+  - SMTP STARTTLS capability and upgrade wrapper
+  - static local password credential decrypt/load
+  - empty local password rejection
+  - constant-length hashed password comparison
+  - generic auth failure message
 
 Pending:
-- local Agent Vault CA TLS and local password auth
 - Gmail XOAUTH2 payload helpers and forced-refresh retry wrappers
 - IMAP proxy parser, upstream XOAUTH2 auth, relay, cleanup
 - SMTP proxy STARTTLS/auth, upstream XOAUTH2 auth, relay, cleanup
