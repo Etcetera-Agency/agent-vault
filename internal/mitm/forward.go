@@ -270,7 +270,11 @@ func (p *Proxy) forwardRequest(
 		return
 	}
 	if inject.QuotaReservation != nil {
-		defer inject.QuotaReservation.Release()
+		defer func() {
+			if inject.QuotaReservation != nil {
+				inject.QuotaReservation.Release()
+			}
+		}()
 	}
 
 	var body io.ReadCloser
@@ -360,6 +364,34 @@ func (p *Proxy) forwardRequest(
 		return
 	}
 
+	if resp.StatusCode == http.StatusTooManyRequests && inject.QuotaReservation != nil &&
+		(r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		inject.QuotaReservation.Commit(resp.StatusCode)
+		inject.QuotaReservation.Cooldown(retryAfterDuration(resp.Header.Get("Retry-After")))
+		inject.QuotaReservation.Release()
+
+		retryInject, retryErr := p.creds.Inject(r.Context(), scope.VaultID, host, port, r.Method, r.URL.Path)
+		if retryErr == nil && retryInject != nil && retryInject.Headers != nil {
+			retryReq := outReq.Clone(outReq.Context())
+			for k, v := range retryInject.Headers {
+				retryReq.Header.Set(k, v)
+			}
+			retryReq.Body = http.NoBody
+			retryReq.ContentLength = 0
+			if retryResp, retryRTErr := p.upstream.RoundTrip(retryReq); retryRTErr == nil {
+				_ = resp.Body.Close()
+				resp = retryResp
+				event.CredentialKeys = retryInject.CredentialKeys
+				inject = retryInject
+				p.logger.Debug("egress quota 429 failover attempted",
+					slog.String("host", host),
+					slog.String("path", r.URL.Path),
+					slog.Int("status", resp.StatusCode),
+				)
+			}
+		}
+	}
+
 	// OAuth 401 retry: if the upstream rejected the token and we have an
 	// OAuth credential, force-refresh and retry once. Only safe methods
 	// (GET/HEAD) are retried — the request body is consumed and cannot be replayed.
@@ -439,6 +471,24 @@ func (p *Proxy) forwardRequest(
 	}
 
 	emit(resp.StatusCode, "")
+}
+
+func retryAfterDuration(raw string) time.Duration {
+	if raw == "" {
+		return time.Minute
+	}
+	if seconds, err := strconv.Atoi(raw); err == nil {
+		if seconds < 1 {
+			seconds = 1
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(raw); err == nil {
+		if d := time.Until(when); d > 0 {
+			return d
+		}
+	}
+	return time.Minute
 }
 
 // knownAPIKeyHeaders are non-Authorization headers that commonly carry

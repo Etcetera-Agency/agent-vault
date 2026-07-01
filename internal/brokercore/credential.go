@@ -172,6 +172,7 @@ func (p *StoreCredentialProvider) Inject(ctx context.Context, vaultID, targetHos
 	)
 
 	var quotaReservation *egressquota.Reservation
+	selectedAccount := ""
 	if p.Quota != nil {
 		reservation, denial := p.Quota.Reserve(ctx, vaultID, *matched)
 		if denial != nil {
@@ -184,6 +185,12 @@ func (p *StoreCredentialProvider) Inject(ctx context.Context, vaultID, targetHos
 			}, &ErrEgressQuotaExceeded{Decision: denial}
 		}
 		quotaReservation = reservation
+		selectedAccount = reservation.Account()
+		if selectedAccount != "" {
+			copySvc := *matched
+			copySvc.Auth = accountAuth(copySvc.Auth, selectedAccount)
+			matched = &copySvc
+		}
 	}
 
 	// Memoize per-key lookups so a credential shared by auth and a
@@ -236,7 +243,7 @@ func (p *StoreCredentialProvider) Inject(ctx context.Context, vaultID, targetHos
 		MatchedHost:      matched.Host,
 		MatchedPath:      matched.Path,
 		MatchedPort:      matched.Port,
-		CredentialKeys:   matched.CredentialKeys(),
+		CredentialKeys:   selectedCredentialKeys(matched.CredentialKeys(), selectedAccount),
 		QuotaReservation: quotaReservation,
 	}
 
@@ -282,4 +289,32 @@ func (p *StoreCredentialProvider) maybeRefreshOAuth(ctx context.Context, vaultID
 		return "", fmt.Errorf("%w: %v", ErrOAuthRefreshFailed, err)
 	}
 	return token, nil
+}
+
+func accountAuth(auth broker.Auth, accountKey string) broker.Auth {
+	if accountKey == "" {
+		return auth
+	}
+	switch auth.Type {
+	case "bearer":
+		auth.Token = accountKey
+	case "api-key":
+		auth.Key = accountKey
+	case "basic":
+		auth.Username = accountKey
+	}
+	return auth
+}
+
+func selectedCredentialKeys(keys []string, selected string) []string {
+	if selected == "" {
+		return keys
+	}
+	out := []string{selected}
+	for _, key := range keys {
+		if key != selected {
+			out = append(out, key)
+		}
+	}
+	return out
 }

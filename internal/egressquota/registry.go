@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -22,6 +23,10 @@ type Registry struct {
 	now      func() time.Time
 	counters map[string]*counterState
 	limits   map[string]*limitState
+	rrIndex  map[string]int
+	alerted  map[string]bool
+
+	OnExhausted func(ctx context.Context, vaultID, service string)
 }
 
 type counterState struct {
@@ -32,8 +37,9 @@ type counterState struct {
 }
 
 type limitState struct {
-	rpmHits  []time.Time
-	inFlight int
+	rpmHits       []time.Time
+	inFlight      int
+	cooldownUntil time.Time
 }
 
 type Decision struct {
@@ -46,6 +52,7 @@ type Reservation struct {
 	reg      *Registry
 	key      string
 	service  string
+	account  string
 	released bool
 	recorded bool
 }
@@ -63,6 +70,8 @@ func New() *Registry {
 		now:      time.Now,
 		counters: make(map[string]*counterState),
 		limits:   make(map[string]*limitState),
+		rrIndex:  make(map[string]int),
+		alerted:  make(map[string]bool),
 	}
 }
 
@@ -179,35 +188,26 @@ func (r *Registry) Reserve(ctx context.Context, vaultID string, svc broker.Servi
 	default:
 	}
 
-	keys := svc.Auth.CredentialKeys()
-	key := quotaKey(vaultID, svc.Name, accountKey(keys))
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	now := r.now()
-	counter := r.counterForLocked(key, now)
-	if svc.Quota.DailyCap != nil && counter.dayCount >= *svc.Quota.DailyCap {
-		return nil, &Decision{Service: svc.Name, RetryAfter: untilNextDay(now), Reason: "daily_cap"}
-	}
-	if svc.Quota.MonthlyCap != nil && counter.monthCount >= *svc.Quota.MonthlyCap {
-		return nil, &Decision{Service: svc.Name, RetryAfter: untilNextMonth(now), Reason: "monthly_cap"}
-	}
+	candidates := r.orderedCandidatesLocked(vaultID, svc, now)
+	var best *Decision
 
-	limit := r.limitForLocked(key)
-	if svc.Quota.Concurrency != nil && limit.inFlight >= *svc.Quota.Concurrency {
-		return nil, &Decision{Service: svc.Name, RetryAfter: time.Second, Reason: "concurrency"}
-	}
-	if svc.Quota.RPM != nil {
-		retryAfter := reserveRPM(now, limit, *svc.Quota.RPM)
-		if retryAfter > 0 {
-			return nil, &Decision{Service: svc.Name, RetryAfter: retryAfter, Reason: "rpm"}
+	for _, candidate := range candidates {
+		denial := r.reserveCandidateLocked(now, svc, candidate)
+		if denial == nil {
+			r.recordRoundRobinLocked(vaultID, svc, candidate.account)
+			return &Reservation{reg: r, key: candidate.key, service: svc.Name, account: candidate.account}, nil
 		}
+		best = earlierDecision(best, denial)
 	}
-	if svc.Quota.Concurrency != nil {
-		limit.inFlight++
+	if best == nil {
+		best = &Decision{Service: svc.Name, RetryAfter: time.Second, Reason: "exhausted"}
 	}
-	return &Reservation{reg: r, key: key, service: svc.Name}, nil
+	r.emitExhaustedAlertLocked(ctx, vaultID, svc.Name, now)
+	return nil, best
 }
 
 func (r *Registry) Snapshot(vaultID, service string, credentialKeys []string) (dayCount, monthCount int) {
@@ -244,6 +244,116 @@ func (r *Registry) limitForLocked(key string) *limitState {
 	return state
 }
 
+type candidate struct {
+	key     string
+	account string
+	quota   broker.ServiceQuota
+}
+
+func (r *Registry) orderedCandidatesLocked(vaultID string, svc broker.Service, now time.Time) []candidate {
+	base := serviceQuotaValue(svc.Quota)
+	capacity := len(svc.Accounts)
+	if capacity == 0 {
+		capacity = 1
+	}
+	candidates := make([]candidate, 0, capacity)
+	if len(svc.Accounts) == 0 {
+		account := accountKey(svc.Auth.CredentialKeys())
+		return []candidate{{key: quotaKey(vaultID, svc.Name, account), account: account, quota: base}}
+	}
+	for _, acct := range svc.Accounts {
+		quota := base
+		if acct.DailyCap != nil {
+			quota.DailyCap = acct.DailyCap
+		}
+		if acct.MonthlyCap != nil {
+			quota.MonthlyCap = acct.MonthlyCap
+		}
+		if acct.RPM != nil {
+			quota.RPM = acct.RPM
+		}
+		candidates = append(candidates, candidate{
+			key:     quotaKey(vaultID, svc.Name, acct.CredentialKey),
+			account: acct.CredentialKey,
+			quota:   quota,
+		})
+	}
+	switch svc.Rotation {
+	case "round_robin":
+		offset := r.rrIndex[serviceKey(vaultID, svc.Name)] % len(candidates)
+		ordered := append([]candidate{}, candidates[offset:]...)
+		ordered = append(ordered, candidates[:offset]...)
+		return ordered
+	default:
+		sort.SliceStable(candidates, func(i, j int) bool {
+			left := r.counterForLocked(candidates[i].key, now)
+			right := r.counterForLocked(candidates[j].key, now)
+			return left.dayCount+left.monthCount < right.dayCount+right.monthCount
+		})
+		return candidates
+	}
+}
+
+func (r *Registry) reserveCandidateLocked(now time.Time, svc broker.Service, c candidate) *Decision {
+	counter := r.counterForLocked(c.key, now)
+	if c.quota.DailyCap != nil && counter.dayCount >= *c.quota.DailyCap {
+		return &Decision{Service: svc.Name, RetryAfter: untilNextDay(now), Reason: "daily_cap"}
+	}
+	if c.quota.MonthlyCap != nil && counter.monthCount >= *c.quota.MonthlyCap {
+		return &Decision{Service: svc.Name, RetryAfter: untilNextMonth(now), Reason: "monthly_cap"}
+	}
+
+	limit := r.limitForLocked(c.key)
+	if limit.cooldownUntil.After(now) {
+		return &Decision{Service: svc.Name, RetryAfter: limit.cooldownUntil.Sub(now), Reason: "cooldown"}
+	}
+	if c.quota.Concurrency != nil && limit.inFlight >= *c.quota.Concurrency {
+		return &Decision{Service: svc.Name, RetryAfter: time.Second, Reason: "concurrency"}
+	}
+	if c.quota.RPM != nil {
+		retryAfter := reserveRPM(now, limit, *c.quota.RPM)
+		if retryAfter > 0 {
+			return &Decision{Service: svc.Name, RetryAfter: retryAfter, Reason: "rpm"}
+		}
+	}
+	if c.quota.Concurrency != nil {
+		limit.inFlight++
+	}
+	return nil
+}
+
+func (r *Registry) recordRoundRobinLocked(vaultID string, svc broker.Service, account string) {
+	if svc.Rotation != "round_robin" || len(svc.Accounts) == 0 {
+		return
+	}
+	for i, acct := range svc.Accounts {
+		if acct.CredentialKey == account {
+			r.rrIndex[serviceKey(vaultID, svc.Name)] = (i + 1) % len(svc.Accounts)
+			return
+		}
+	}
+}
+
+func serviceQuotaValue(q *broker.ServiceQuota) broker.ServiceQuota {
+	if q == nil {
+		return broker.ServiceQuota{}
+	}
+	return *q
+}
+
+func (r *Registry) emitExhaustedAlertLocked(ctx context.Context, vaultID, service string, now time.Time) {
+	if r.OnExhausted == nil {
+		return
+	}
+	dayKey, _ := windowKeys(now)
+	key := vaultID + "\x00" + service + "\x00" + dayKey
+	if r.alerted[key] {
+		return
+	}
+	r.alerted[key] = true
+	go r.OnExhausted(context.WithoutCancel(ctx), vaultID, service)
+}
+
 func (res *Reservation) Commit(status int) {
 	if res == nil || status <= 0 {
 		return
@@ -257,6 +367,29 @@ func (res *Reservation) Commit(status int) {
 	state.dayCount++
 	state.monthCount++
 	res.recorded = true
+}
+
+func (res *Reservation) Account() string {
+	if res == nil {
+		return ""
+	}
+	return res.account
+}
+
+func (res *Reservation) Cooldown(d time.Duration) {
+	if res == nil {
+		return
+	}
+	if d <= 0 {
+		d = time.Minute
+	}
+	res.reg.mu.Lock()
+	defer res.reg.mu.Unlock()
+	state := res.reg.limitForLocked(res.key)
+	until := res.reg.now().Add(d)
+	if until.After(state.cooldownUntil) {
+		state.cooldownUntil = until
+	}
 }
 
 func (res *Reservation) Release() {
@@ -314,6 +447,23 @@ func accountKey(keys []string) string {
 
 func quotaKey(vaultID, service, account string) string {
 	return vaultID + "\x00" + service + "\x00" + account
+}
+
+func serviceKey(vaultID, service string) string {
+	return vaultID + "\x00" + service
+}
+
+func earlierDecision(current, next *Decision) *Decision {
+	if current == nil {
+		return next
+	}
+	if next == nil {
+		return current
+	}
+	if next.RetryAfter < current.RetryAfter {
+		return next
+	}
+	return current
 }
 
 func windowKeys(t time.Time) (string, string) {

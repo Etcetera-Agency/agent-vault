@@ -137,6 +137,43 @@ func TestInject_EgressQuotaDeniesBeforeCredentialLookup(t *testing.T) {
 	}
 }
 
+func TestInject_EgressQuotaSelectedAccountOverridesBearerToken(t *testing.T) {
+	key32 := make32(0x13)
+	f := newFakeCredStore()
+	f.setServices(t, "v1", []broker.Service{{
+		Name:     "apify",
+		Host:     "api.apify.com",
+		Auth:     broker.Auth{Type: "bearer", Token: "APIFY_TOKEN_1"},
+		Quota:    &broker.ServiceQuota{DailyCap: intPtr(10)},
+		Rotation: "round_robin",
+		Accounts: []broker.ServiceAccount{
+			{ID: "acct1", CredentialKey: "APIFY_TOKEN_1"},
+			{ID: "acct2", CredentialKey: "APIFY_TOKEN_2"},
+		},
+	}})
+	f.setCred(t, key32, "v1", "APIFY_TOKEN_1", "first")
+	f.setCred(t, key32, "v1", "APIFY_TOKEN_2", "second")
+
+	p := NewStoreCredentialProvider(f, key32)
+	p.Quota = egressquota.New()
+	first, err := p.Inject(context.Background(), "v1", "api.apify.com", 0, "GET", "/")
+	if err != nil {
+		t.Fatalf("first inject: %v", err)
+	}
+	first.QuotaReservation.Release()
+	second, err := p.Inject(context.Background(), "v1", "api.apify.com", 0, "GET", "/")
+	if err != nil {
+		t.Fatalf("second inject: %v", err)
+	}
+	defer second.QuotaReservation.Release()
+	if second.Headers["Authorization"] != "Bearer second" {
+		t.Fatalf("Authorization = %q, want Bearer second", second.Headers["Authorization"])
+	}
+	if len(second.CredentialKeys) == 0 || second.CredentialKeys[0] != "APIFY_TOKEN_2" {
+		t.Fatalf("CredentialKeys = %v, want selected account first", second.CredentialKeys)
+	}
+}
+
 func TestInject_MethodPolicyAllowsListedMethod(t *testing.T) {
 	key32 := make32(0x91)
 	f := newFakeCredStore()

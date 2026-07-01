@@ -99,6 +99,112 @@ func TestReserveDeniesConcurrencyUntilRelease(t *testing.T) {
 	res2.Release()
 }
 
+func TestReserveLeastUsedSelectsLowerUsageAccount(t *testing.T) {
+	reg := New()
+	reg.Seed([]Snapshot{
+		{VaultID: "vault-1", MatchedService: "apify", CredentialKeys: []string{"APIFY_TOKEN_1"}, CreatedAt: time.Now(), Status: http.StatusOK},
+		{VaultID: "vault-1", MatchedService: "apify", CredentialKeys: []string{"APIFY_TOKEN_1"}, CreatedAt: time.Now(), Status: http.StatusOK},
+	})
+	svc := quotaService(&broker.ServiceQuota{DailyCap: intPtr(10)})
+	svc.Rotation = "least_used"
+	svc.Accounts = []broker.ServiceAccount{
+		{ID: "acct1", CredentialKey: "APIFY_TOKEN_1"},
+		{ID: "acct2", CredentialKey: "APIFY_TOKEN_2"},
+	}
+
+	res, denial := reg.Reserve(context.Background(), "vault-1", svc)
+	if denial != nil {
+		t.Fatalf("unexpected denial: %+v", denial)
+	}
+	if res.Account() != "APIFY_TOKEN_2" {
+		t.Fatalf("account = %q, want APIFY_TOKEN_2", res.Account())
+	}
+	res.Release()
+}
+
+func TestReserveRoundRobinAlternatesAccounts(t *testing.T) {
+	reg := New()
+	svc := quotaService(&broker.ServiceQuota{DailyCap: intPtr(10)})
+	svc.Rotation = "round_robin"
+	svc.Accounts = []broker.ServiceAccount{
+		{ID: "acct1", CredentialKey: "APIFY_TOKEN_1"},
+		{ID: "acct2", CredentialKey: "APIFY_TOKEN_2"},
+	}
+
+	first, denial := reg.Reserve(context.Background(), "vault-1", svc)
+	if denial != nil {
+		t.Fatalf("unexpected first denial: %+v", denial)
+	}
+	first.Release()
+	second, denial := reg.Reserve(context.Background(), "vault-1", svc)
+	if denial != nil {
+		t.Fatalf("unexpected second denial: %+v", denial)
+	}
+	second.Release()
+	if first.Account() != "APIFY_TOKEN_1" || second.Account() != "APIFY_TOKEN_2" {
+		t.Fatalf("accounts = %q then %q, want APIFY_TOKEN_1 then APIFY_TOKEN_2", first.Account(), second.Account())
+	}
+}
+
+func TestReserveSkipsCooldownAccount(t *testing.T) {
+	reg := New()
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	reg.now = func() time.Time { return now }
+	svc := quotaService(&broker.ServiceQuota{DailyCap: intPtr(10)})
+	svc.Rotation = "round_robin"
+	svc.Accounts = []broker.ServiceAccount{
+		{ID: "acct1", CredentialKey: "APIFY_TOKEN_1"},
+		{ID: "acct2", CredentialKey: "APIFY_TOKEN_2"},
+	}
+
+	first, denial := reg.Reserve(context.Background(), "vault-1", svc)
+	if denial != nil {
+		t.Fatalf("unexpected first denial: %+v", denial)
+	}
+	first.Cooldown(2 * time.Minute)
+	first.Release()
+
+	second, denial := reg.Reserve(context.Background(), "vault-1", svc)
+	if denial != nil {
+		t.Fatalf("unexpected second denial: %+v", denial)
+	}
+	if second.Account() != "APIFY_TOKEN_2" {
+		t.Fatalf("account = %q, want APIFY_TOKEN_2", second.Account())
+	}
+	second.Release()
+}
+
+func TestReserveEmitsSingleExhaustionAlertPerDay(t *testing.T) {
+	reg := New()
+	reg.now = func() time.Time { return time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC) }
+	alerts := make(chan string, 2)
+	reg.OnExhausted = func(_ context.Context, _, service string) {
+		alerts <- service
+	}
+	svc := quotaService(&broker.ServiceQuota{DailyCap: intPtr(0)})
+
+	for i := 0; i < 2; i++ {
+		_, denial := reg.Reserve(context.Background(), "vault-1", svc)
+		if denial == nil {
+			t.Fatal("expected quota denial")
+		}
+	}
+
+	select {
+	case got := <-alerts:
+		if got != "apify" {
+			t.Fatalf("alert = %q, want apify", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected alert")
+	}
+	select {
+	case got := <-alerts:
+		t.Fatalf("unexpected duplicate alert %q", got)
+	default:
+	}
+}
+
 func TestSeedFromRequestLogsReconstructsWindows(t *testing.T) {
 	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
 	reg := New()

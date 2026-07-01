@@ -61,6 +61,7 @@ type fakeCredProvider struct {
 	// byHostPort maps "host:port" to the injection outcome. Checked
 	// before byHost so port-specific entries take precedence.
 	byHostPort map[string]fakeInjectResult
+	sequence   []fakeInjectResult
 	lastMethod string
 }
 
@@ -71,6 +72,11 @@ type fakeInjectResult struct {
 
 func (f *fakeCredProvider) Inject(_ context.Context, _, targetHost string, targetPort int, targetMethod string, _ string) (*brokercore.InjectResult, error) {
 	f.lastMethod = targetMethod
+	if len(f.sequence) > 0 {
+		res := f.sequence[0]
+		f.sequence = f.sequence[1:]
+		return res.result, res.err
+	}
 	host := targetHost
 	if h, _, err := net.SplitHostPort(targetHost); err == nil {
 		host = h

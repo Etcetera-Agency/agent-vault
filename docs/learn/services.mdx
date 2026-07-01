@@ -89,6 +89,15 @@ reached `daily_cap` or `monthly_cap`, an exhausted `rpm` window, or a full
 provider-side ceiling first when the upstream supports it, then set the Agent
 Vault quota as the local guardrail agents cannot bypass.
 
+When `accounts` are configured, Agent Vault selects a non-exhausted account
+before injecting credentials. `least_used` chooses the account with the lowest
+current window usage; `round_robin` walks the account list and skips exhausted
+or cooling accounts. If a replay-safe request (`GET` or `HEAD`) receives an
+upstream `429`, Agent Vault cools down that account using `Retry-After` and
+retries with another available account. When every account is exhausted or
+cooling, Agent Vault emits one SMTP operator alert per service per day when SMTP
+notifications are configured.
+
 ## Auth types
 
 Every service must include an `auth` config that tells Agent Vault how to authenticate to the target host. The `auth` config references [credential](/learn/credentials) key names (not the actual credential values) stored in the vault.

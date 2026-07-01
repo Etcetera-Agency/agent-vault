@@ -98,3 +98,16 @@ Completed:
 Pending:
 - Multi-account rotation, cooldown, upstream 429 failover, and exhaustion alerts remain in `add-credential-rotation`.
 - UI editing and usage display remain in `add-quota-ui`.
+
+add-credential-rotation coverage
+
+Completed:
+- Account pools select non-exhausted accounts using `least_used` or `round_robin`.
+- Account-specific counters, rpm, cooldown, and per-account cap overrides participate in selection.
+- Selected account credential keys replace the primary auth key before injection and are logged first for restart seeding.
+- Replay-safe upstream 429 responses cool down the account and retry with the next available account.
+- Full-pool exhaustion returns 429 and emits one SMTP operator alert per service/day when SMTP is configured.
+- Tests cover least-used, round-robin, cooldown skip, upstream 429 failover, full-pool exhaustion, and alert dedup.
+
+Pending:
+- UI editing and usage display remain in `add-quota-ui`.

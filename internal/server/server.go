@@ -177,6 +177,37 @@ func (s *Server) captureEvent(r *http.Request, event string, actor *Actor, extra
 	s.telemetry.CaptureEvent(distinctID, event, props)
 }
 
+func (s *Server) notifyQuotaExhausted(ctx context.Context, vaultID, service string) {
+	if s.notifier == nil || !s.notifier.Enabled() {
+		return
+	}
+	members, err := s.store.ListVaultMembers(ctx, vaultID)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("quota exhaustion member lookup failed", slog.String("vault_id", vaultID), slog.String("err", err.Error()))
+		}
+		return
+	}
+	emails := make([]string, 0, len(members))
+	for _, member := range members {
+		if member.ActorType != "user" {
+			continue
+		}
+		email, err := s.store.GetUserEmailByID(ctx, member.ActorID)
+		if err == nil && email != "" {
+			emails = append(emails, email)
+		}
+	}
+	if len(emails) == 0 {
+		return
+	}
+	subject := "Agent Vault quota exhausted: " + service
+	body := fmt.Sprintf("Service %q has exhausted its configured Agent Vault egress quota. Requests will return 429 until the quota window resets or policy changes.", service)
+	if err := s.notifier.SendMail(emails, subject, body); err != nil && s.logger != nil {
+		s.logger.Warn("quota exhaustion notification failed", slog.String("service", service), slog.String("err", err.Error()))
+	}
+}
+
 // SessionResolver returns a brokercore.SessionResolver backed by this
 // server's store.
 func (s *Server) SessionResolver() brokercore.SessionResolver {
@@ -797,6 +828,7 @@ func New(addr string, store Store, encKey []byte, notifier *notify.Notifier, ini
 	if err := s.egressQuota.SeedFromRequestLogs(context.Background(), store, 10000); err != nil && logger != nil {
 		logger.Warn("egress quota seed failed", slog.String("err", err.Error()))
 	}
+	s.egressQuota.OnExhausted = s.notifyQuotaExhausted
 
 	// Apply SSRF protection to OAuth token endpoint requests.
 	oauthTransport := http.DefaultTransport.(*http.Transport).Clone()

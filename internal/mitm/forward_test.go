@@ -17,7 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/brokercore"
+	"github.com/Infisical/agent-vault/internal/egressquota"
 	"github.com/Infisical/agent-vault/internal/netguard"
 	"github.com/Infisical/agent-vault/internal/ratelimit"
 	"github.com/Infisical/agent-vault/internal/requestlog"
@@ -154,6 +156,72 @@ func TestMITMForwardPlainHTTPInjectsCredentials(t *testing.T) {
 	// as host:port and forwardRequest sets outReq.Host = target.
 	if sawHost != upstreamAuthority {
 		t.Errorf("upstream Host = %q, want %q", sawHost, upstreamAuthority)
+	}
+}
+
+func TestMITMForwardFailsOverOnUpstreamQuota429(t *testing.T) {
+	var saw []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		saw = append(saw, auth)
+		if auth == "Bearer first" {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+			return
+		}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+
+	upstreamAuthority := strings.TrimPrefix(upstream.URL, "http://")
+	reg := egressquota.New()
+	dailyCap := 10
+	svc := broker.Service{
+		Name:     "apify",
+		Auth:     broker.Auth{Type: "bearer", Token: "APIFY_TOKEN_1"},
+		Quota:    &broker.ServiceQuota{DailyCap: &dailyCap},
+		Rotation: "round_robin",
+		Accounts: []broker.ServiceAccount{
+			{ID: "acct1", CredentialKey: "APIFY_TOKEN_1"},
+			{ID: "acct2", CredentialKey: "APIFY_TOKEN_2"},
+		},
+	}
+	firstReservation, denial := reg.Reserve(context.Background(), "v1", svc)
+	if denial != nil {
+		t.Fatalf("first reserve: %+v", denial)
+	}
+	secondReservation, denial := reg.Reserve(context.Background(), "v1", svc)
+	if denial != nil {
+		t.Fatalf("second reserve: %+v", denial)
+	}
+	cp := &fakeCredProvider{sequence: []fakeInjectResult{
+		{result: &brokercore.InjectResult{
+			Headers:          map[string]string{"Authorization": "Bearer first"},
+			CredentialKeys:   []string{"APIFY_TOKEN_1"},
+			QuotaReservation: firstReservation,
+		}},
+		{result: &brokercore.InjectResult{
+			Headers:          map[string]string{"Authorization": "Bearer second"},
+			CredentialKeys:   []string{"APIFY_TOKEN_2"},
+			QuotaReservation: secondReservation,
+		}},
+	}}
+	sr := validTokenResolver("av_sess_ok",
+		&brokercore.ProxyScope{VaultID: "v1", VaultName: "default", VaultRole: "proxy"})
+	proxyURL, clientRoots, _ := setupProxy(t, sr, cp)
+	client := newTrustingClient(proxyURL, url.User("av_sess_ok"), clientRoots)
+
+	resp, err := client.Get("http://" + upstreamAuthority + "/quota")
+	if err != nil {
+		t.Fatalf("client.Get: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != "ok" {
+		t.Fatalf("status/body = %d %q, want 200 ok", resp.StatusCode, body)
+	}
+	if strings.Join(saw, ",") != "Bearer first,Bearer second" {
+		t.Fatalf("upstream auth sequence = %v", saw)
 	}
 }
 
