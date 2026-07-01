@@ -30,3 +30,12 @@ Verification:
 
 Verification:
 - `/usr/local/bin/go test ./internal/mailproxy ./cmd`
+
+## Slice 5: XOAUTH2 Helpers
+
+- Added exact Gmail XOAUTH2 payload and base64 helpers.
+- Added OAuth token provider wrapper over the shared resolver, including forced refresh.
+- Added one-retry helper for upstream XOAUTH2 rejection.
+
+Verification:
+- `/usr/local/bin/go test ./internal/mailproxy`

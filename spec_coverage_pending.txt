@@ -27,9 +27,13 @@ Completed:
   - empty local password rejection
   - constant-length hashed password comparison
   - generic auth failure message
+- XOAUTH2 helpers:
+  - exact Gmail XOAUTH2 payload bytes
+  - XOAUTH2 base64 encoding
+  - token provider wrapper for normal and forced refresh
+  - one forced-refresh retry on upstream auth rejection
 
 Pending:
-- Gmail XOAUTH2 payload helpers and forced-refresh retry wrappers
 - IMAP proxy parser, upstream XOAUTH2 auth, relay, cleanup
 - SMTP proxy STARTTLS/auth, upstream XOAUTH2 auth, relay, cleanup
 - shutdown lifecycle and docs

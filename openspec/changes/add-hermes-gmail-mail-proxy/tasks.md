@@ -34,10 +34,10 @@
 
 ## 5. XOAUTH2 Helpers
 
-- [ ] 5.1 Add failing tests for exact Gmail XOAUTH2 payload bytes and base64 encoding.
-- [ ] 5.2 Add failing tests for one forced-refresh retry on upstream auth rejection.
-- [ ] 5.3 Implement `internal/mailproxy/xoauth2.go` and token-provider wrappers.
-- [ ] 5.4 Run XOAUTH2 tests.
+- [x] 5.1 Add failing tests for exact Gmail XOAUTH2 payload bytes and base64 encoding.
+- [x] 5.2 Add failing tests for one forced-refresh retry on upstream auth rejection.
+- [x] 5.3 Implement `internal/mailproxy/xoauth2.go` and token-provider wrappers.
+- [x] 5.4 Run XOAUTH2 tests.
 
 ## 6. IMAP Proxy
 
