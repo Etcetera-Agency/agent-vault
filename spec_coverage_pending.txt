@@ -7,6 +7,11 @@ Completed:
 - SMTP upstream STARTTLS review gap:
   - configured SMTP upstream host becomes TLS ServerName
   - default `smtp.gmail.com:587` keeps `smtp.gmail.com` ServerName
+- Existing service mail proxy toggle command:
+  - updates `mail_proxy.imap` on an existing policy while preserving unrelated service fields
+  - creates a `mail_proxy` block on an existing service without one
+  - rejects no-op calls without fetching or updating services
+  - rejects missing service names without updating the service allowlist
 - Shared OAuth access token resolver:
   - valid token returned without refresh
   - five-minute-buffer refresh
@@ -61,5 +66,4 @@ Completed:
   - Hermes Gmail guide with scope, credentials, CA trust, and env setup
 
 Pending:
-- Existing service `mail_proxy` policy must be mutable by CLI without dropping unrelated service fields.
 - Hygiene/docs cleanup must remove concept patch trailing whitespace and document the CLI toggle command.

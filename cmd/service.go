@@ -142,6 +142,20 @@ var serviceClearCmd = &cobra.Command{
 	},
 }
 
+var serviceMailProxyCmd = &cobra.Command{
+	Use:   "mail-proxy",
+	Short: "Manage mail proxy policy on existing services",
+}
+
+var serviceMailProxySetCmd = &cobra.Command{
+	Use:   "set <service>",
+	Short: "Set mail proxy policy fields on an existing service",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runServiceMailProxySet(cmd, args[0])
+	},
+}
+
 var serviceAddCmd = &cobra.Command{
 	Use:   "add",
 	Short: "Add or update services (upsert by name)",
@@ -320,6 +334,92 @@ then host. Idempotent.`,
 	},
 }
 
+func runServiceMailProxySet(cmd *cobra.Command, serviceName string) error {
+	flags := cmd.Flags()
+	imapChanged := flags.Changed("imap")
+	smtpChanged := flags.Changed("smtp")
+	emailChanged := flags.Changed("email")
+	passwordChanged := flags.Changed("local-password-credential")
+	if !imapChanged && !smtpChanged && !emailChanged && !passwordChanged {
+		return fmt.Errorf("provide at least one mail proxy field to change")
+	}
+
+	vault := resolveVault(cmd)
+	sess, err := ensureSession()
+	if err != nil {
+		return err
+	}
+
+	services, err := fetchVaultServices(sess.Address, sess.Token, vault)
+	if err != nil {
+		return err
+	}
+
+	found := false
+	for i := range services {
+		if services[i].Name != serviceName {
+			continue
+		}
+		found = true
+		if services[i].MailProxy == nil {
+			services[i].MailProxy = &broker.MailProxyPolicy{}
+		}
+		if imapChanged {
+			services[i].MailProxy.IMAP, _ = flags.GetBool("imap")
+		}
+		if smtpChanged {
+			services[i].MailProxy.SMTP, _ = flags.GetBool("smtp")
+		}
+		if emailChanged {
+			services[i].MailProxy.Email, _ = flags.GetString("email")
+			services[i].MailProxy.Email = strings.TrimSpace(services[i].MailProxy.Email)
+		}
+		if passwordChanged {
+			services[i].MailProxy.LocalPasswordCredential, _ = flags.GetString("local-password-credential")
+			services[i].MailProxy.LocalPasswordCredential = strings.TrimSpace(services[i].MailProxy.LocalPasswordCredential)
+		}
+		break
+	}
+	if !found {
+		return fmt.Errorf("service %q not found", serviceName)
+	}
+
+	if err := putVaultServices(sess.Address, sess.Token, vault, services); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "%s Mail proxy updated: %s\n", successText("✓"), serviceName)
+	return nil
+}
+
+func fetchVaultServices(address, token, vault string) ([]broker.Service, error) {
+	reqURL := fmt.Sprintf("%s/v1/vaults/%s/services", address, vault)
+	respBody, err := doAdminRequestWithBody("GET", reqURL, token, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Services []broker.Service `json:"services"`
+	}
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return nil, fmt.Errorf("parsing response: %w", err)
+	}
+	return resp.Services, nil
+}
+
+func putVaultServices(address, token, vault string, services []broker.Service) error {
+	servicesJSON, err := json.Marshal(services)
+	if err != nil {
+		return fmt.Errorf("marshalling services: %w", err)
+	}
+	body, err := json.Marshal(map[string]json.RawMessage{"services": servicesJSON})
+	if err != nil {
+		return err
+	}
+	reqURL := fmt.Sprintf("%s/v1/vaults/%s/services", address, vault)
+	return doAdminRequest("PUT", reqURL, token, body)
+}
+
 func patchServiceEnabled(cmd *cobra.Command, ref string, enabled bool) error {
 	vault := resolveVault(cmd)
 
@@ -438,12 +538,19 @@ func init() {
 	serviceAddCmd.Flags().String("mail-proxy-email", "", "Email address used for Gmail XOAUTH2 mail proxy auth")
 	serviceAddCmd.Flags().String("mail-proxy-local-password-credential", "", "Static credential key for Hermes-to-mail-proxy password")
 
+	serviceMailProxySetCmd.Flags().Bool("imap", false, "Enable or disable IMAP for this service's mail proxy policy")
+	serviceMailProxySetCmd.Flags().Bool("smtp", false, "Enable or disable SMTP for this service's mail proxy policy")
+	serviceMailProxySetCmd.Flags().String("email", "", "Email address used for Gmail XOAUTH2 mail proxy auth")
+	serviceMailProxySetCmd.Flags().String("local-password-credential", "", "Static credential key for Hermes-to-mail-proxy password")
+	serviceMailProxyCmd.AddCommand(serviceMailProxySetCmd)
+
 	// service remove flags
 	serviceRemoveCmd.Flags().Bool("yes", false, "Skip confirmation prompt")
 
 	serviceCmd.AddCommand(serviceListCmd)
 	serviceCmd.AddCommand(serviceSetCmd)
 	serviceCmd.AddCommand(serviceAddCmd)
+	serviceCmd.AddCommand(serviceMailProxyCmd)
 	serviceCmd.AddCommand(serviceEnableCmd)
 	serviceCmd.AddCommand(serviceDisableCmd)
 	serviceCmd.AddCommand(serviceRemoveCmd)

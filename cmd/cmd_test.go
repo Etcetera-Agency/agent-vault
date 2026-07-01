@@ -235,7 +235,7 @@ func TestServiceSubcommandsRegistered(t *testing.T) {
 		registered[c.Name()] = true
 	}
 
-	expected := []string{"list", "set", "add", "enable", "disable", "remove", "clear"}
+	expected := []string{"list", "set", "add", "mail-proxy", "enable", "disable", "remove", "clear"}
 	for _, name := range expected {
 		if !registered[name] {
 			t.Errorf("expected service subcommand %q to be registered, but it was not", name)

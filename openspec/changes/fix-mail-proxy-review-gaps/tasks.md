@@ -26,14 +26,14 @@
 
 ## 4. Slice 3: Existing Service Mail Proxy Toggle CLI
 
-- [ ] 4.1 Add failing CLI test for updating `mail_proxy.imap=false` on an existing service while preserving host, auth, methods, enabled, substitutions, email, and local password credential.
-- [ ] 4.2 Add failing CLI test for updating `mail_proxy.smtp=true` on an existing service that has no prior `mail_proxy` block.
-- [ ] 4.3 Add failing CLI test that rejects no-op calls with none of `--imap`, `--smtp`, `--email`, or `--local-password-credential` changed.
-- [ ] 4.4 Add `agent-vault vault service mail-proxy set <service>` under the existing service command tree.
-- [ ] 4.5 Implement GET full services, exact name lookup, focused `MailProxy` mutation, and PUT full services using existing admin request helpers.
-- [ ] 4.6 Do not add Web UI edit controls for mail proxy policy.
-- [ ] 4.7 Run `/usr/local/bin/go test ./cmd ./internal/server ./internal/broker`.
-- [ ] 4.8 Use Code Simplifier for this slice.
+- [x] 4.1 Add failing CLI test for updating `mail_proxy.imap=false` on an existing service while preserving host, auth, methods, enabled, substitutions, email, and local password credential.
+- [x] 4.2 Add failing CLI test for updating `mail_proxy.smtp=true` on an existing service that has no prior `mail_proxy` block.
+- [x] 4.3 Add failing CLI test that rejects no-op calls with none of `--imap`, `--smtp`, `--email`, or `--local-password-credential` changed.
+- [x] 4.4 Add `agent-vault vault service mail-proxy set <service>` under the existing service command tree.
+- [x] 4.5 Implement GET full services, exact name lookup, focused `MailProxy` mutation, and PUT full services using existing admin request helpers.
+- [x] 4.6 Do not add Web UI edit controls for mail proxy policy.
+- [x] 4.7 Run `/usr/local/bin/go test ./cmd ./internal/server ./internal/broker`.
+- [x] 4.8 Use Code Simplifier for this slice.
 
 ## 5. Slice 4: Hygiene And Docs
 
