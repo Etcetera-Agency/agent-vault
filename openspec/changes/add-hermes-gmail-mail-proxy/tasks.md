@@ -41,11 +41,11 @@
 
 ## 6. IMAP Proxy
 
-- [ ] 6.1 Add fake upstream IMAP tests for `CAPABILITY`, `NOOP`, malformed command, bad local auth, successful `LOGIN`, XOAUTH2 auth, and raw relay after auth.
-- [ ] 6.2 Implement local IMAP implicit TLS listener and pre-auth parser.
-- [ ] 6.3 Implement upstream `imap.gmail.com:993` TLS connect and XOAUTH2 authenticate.
-- [ ] 6.4 Implement bidirectional relay and connection cleanup.
-- [ ] 6.5 Run IMAP tests.
+- [x] 6.1 Add fake upstream IMAP tests for `CAPABILITY`, `NOOP`, malformed command, bad local auth, successful `LOGIN`, XOAUTH2 auth, and raw relay after auth.
+- [x] 6.2 Implement local IMAP implicit TLS listener and pre-auth parser.
+- [x] 6.3 Implement upstream `imap.gmail.com:993` TLS connect and XOAUTH2 authenticate.
+- [x] 6.4 Implement bidirectional relay and connection cleanup.
+- [x] 6.5 Run IMAP tests.
 
 ## 7. SMTP Proxy
 

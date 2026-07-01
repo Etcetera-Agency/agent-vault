@@ -39,3 +39,12 @@ Verification:
 
 Verification:
 - `/usr/local/bin/go test ./internal/mailproxy`
+
+## Slice 6: IMAP Proxy
+
+- Added IMAP implicit TLS session handler with pre-auth parser for `CAPABILITY`, `NOOP`, `LOGIN`, `LOGOUT`, malformed commands, and unsupported commands.
+- Added Gmail IMAP TLS dialer and XOAUTH2 authentication command.
+- Added bidirectional relay helper and fake-upstream tests covering raw relay after local/upstream auth.
+
+Verification:
+- `/usr/local/bin/go test ./internal/mailproxy`

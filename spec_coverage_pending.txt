@@ -32,9 +32,16 @@ Completed:
   - XOAUTH2 base64 encoding
   - token provider wrapper for normal and forced refresh
   - one forced-refresh retry on upstream auth rejection
+- IMAP proxy:
+  - local implicit TLS session handling
+  - CAPABILITY and NOOP pre-auth commands
+  - malformed command and bad local auth handling
+  - successful LOGIN flow
+  - Gmail IMAP TLS dialer and XOAUTH2 auth command
+  - raw relay after auth
+  - connection cleanup via bidirectional relay
 
 Pending:
-- IMAP proxy parser, upstream XOAUTH2 auth, relay, cleanup
 - SMTP proxy STARTTLS/auth, upstream XOAUTH2 auth, relay, cleanup
 - shutdown lifecycle and docs
 - final full relevant suite and OpenSpec strict validation before archive
