@@ -32,6 +32,12 @@ between eligible account credentials and honor cooldown/failover state, but it
 will not apply daily, monthly, rpm, or concurrency limits unless those caps are
 configured.
 
+When an account-pool request receives upstream HTTP 429, Agent Vault cools down
+the failed account, releases that reservation, and retries with the next
+available account. Replayable requests, including POST and PUT bodies, are
+rebuilt from the original materialized body within the request body size limit.
+Only the final forwarded attempt is committed to quota usage.
+
 This keeps identity-bound credentials, such as Gmail, Google Calendar, and mail
 proxy credentials, isolated unless an operator explicitly opts them into a
 provider pool.

@@ -1,6 +1,7 @@
 package mitm
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -278,18 +279,31 @@ func (p *Proxy) forwardRequest(
 		}()
 	}
 
-	var body io.ReadCloser
-	var contentLength int64
-
 	hasSubs := brokercore.HasBodySubstitutions(inject.Substitutions)
-	canStream := !hasSubs && r.ContentLength >= 0
+	accountPoolRequest := inject.AccountID != "" && inject.QuotaReservation != nil
+	// AICODE-NOTE: Account-pool requests must be materialized so 429 failover can rebuild each attempt with a fresh body.
+	canStream := !hasSubs && !accountPoolRequest && r.ContentLength >= 0
 
+	var bodyBytes []byte
+	var streamBody io.ReadCloser
+	var contentLength int64
 	if canStream {
-		body = r.Body
+		streamBody = r.Body
 		contentLength = r.ContentLength
 	} else {
 		r.Body = http.MaxBytesReader(w, r.Body, brokercore.MaxMaterializeBytes)
-		body, contentLength, err = brokercore.MaterializeRequestBody(r.Body)
+		materialized, materializedLen, matErr := brokercore.MaterializeRequestBody(r.Body)
+		if matErr != nil {
+			status, code := brokercore.RequestBodyErrorCode(matErr)
+			http.Error(w, http.StatusText(status), status)
+			emit(status, code)
+			return
+		}
+		contentLength = materializedLen
+		if materialized != nil && materialized != http.NoBody {
+			bodyBytes, err = io.ReadAll(materialized)
+			_ = materialized.Close()
+		}
 		if err != nil {
 			status, code := brokercore.RequestBodyErrorCode(err)
 			http.Error(w, http.StatusText(status), status)
@@ -298,49 +312,69 @@ func (p *Proxy) forwardRequest(
 		}
 	}
 
-	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, outURL.String(), body)
-	if err != nil {
-		http.Error(w, "bad gateway", http.StatusBadGateway)
-		emit(http.StatusBadGateway, "internal")
-		return
-	}
-	outReq.Host = hostHeaderForScheme(scheme, target)
-	outReq.ContentLength = contentLength
-
 	wsUpgrade := isWebSocketUpgrade(r)
+	streamUsed := false
+	buildOutReq := func(currentInject *brokercore.InjectResult) (*http.Request, error) {
+		var body io.ReadCloser
+		switch {
+		case canStream:
+			if streamUsed {
+				return nil, fmt.Errorf("stream body already used")
+			}
+			streamUsed = true
+			body = streamBody
+		case len(bodyBytes) > 0:
+			body = io.NopCloser(bytes.NewReader(bodyBytes))
+		default:
+			body = http.NoBody
+		}
 
-	if wsUpgrade {
-		copyWebSocketHandshakeHeaders(r.Header, outReq.Header)
-		brokercore.ApplyInjection(r.Header, outReq.Header, inject, websocketHandshakeHeaderNames...)
-	} else {
-		brokercore.ApplyInjection(r.Header, outReq.Header, inject)
+		outReq, err := http.NewRequestWithContext(r.Context(), r.Method, outURL.String(), body)
+		if err != nil {
+			return nil, err
+		}
+		outReq.Host = hostHeaderForScheme(scheme, target)
+		outReq.ContentLength = contentLength
+
+		if wsUpgrade {
+			copyWebSocketHandshakeHeaders(r.Header, outReq.Header)
+			brokercore.ApplyInjection(r.Header, outReq.Header, currentInject, websocketHandshakeHeaderNames...)
+		} else {
+			brokercore.ApplyInjection(r.Header, outReq.Header, currentInject)
+		}
+
+		if err := brokercore.ApplySubstitutions(outReq.URL, outReq.Header, currentInject.Substitutions); err != nil {
+			_ = outReq.Body.Close()
+			return nil, err
+		}
+
+		if ce := outReq.Header.Get("Content-Encoding"); ce != "" {
+			p.logger.Debug("skipping body substitution for compressed request",
+				slog.String("content_encoding", ce),
+				slog.String("host", host),
+			)
+		} else {
+			newBody, newLen, modified, bErr := brokercore.ApplyBodySubstitutions(
+				outReq.Body, outReq.ContentLength,
+				outReq.Header.Get("Content-Type"), currentInject.Substitutions)
+			if bErr != nil {
+				_ = outReq.Body.Close()
+				return nil, bErr
+			}
+			outReq.Body = newBody
+			if modified {
+				outReq.ContentLength = newLen
+				outReq.Header.Set("Content-Length", fmt.Sprintf("%d", newLen))
+			}
+		}
+		return outReq, nil
 	}
 
-	if err := brokercore.ApplySubstitutions(outReq.URL, outReq.Header, inject.Substitutions); err != nil {
+	outReq, err := buildOutReq(inject)
+	if err != nil {
 		http.Error(w, "bad gateway", http.StatusBadGateway)
 		emit(http.StatusBadGateway, "substitution_error")
 		return
-	}
-
-	if ce := outReq.Header.Get("Content-Encoding"); ce != "" {
-		p.logger.Debug("skipping body substitution for compressed request",
-			slog.String("content_encoding", ce),
-			slog.String("host", host),
-		)
-	} else {
-		newBody, newLen, modified, bErr := brokercore.ApplyBodySubstitutions(
-			outReq.Body, outReq.ContentLength,
-			outReq.Header.Get("Content-Type"), inject.Substitutions)
-		if bErr != nil {
-			http.Error(w, "bad gateway", http.StatusBadGateway)
-			emit(http.StatusBadGateway, "substitution_error")
-			return
-		}
-		outReq.Body = newBody
-		if modified {
-			outReq.ContentLength = newLen
-			outReq.Header.Set("Content-Length", fmt.Sprintf("%d", newLen))
-		}
 	}
 
 	if wsUpgrade {
@@ -365,33 +399,34 @@ func (p *Proxy) forwardRequest(
 		return
 	}
 
-	if resp.StatusCode == http.StatusTooManyRequests && inject.QuotaReservation != nil &&
-		(r.Method == http.MethodGet || r.Method == http.MethodHead) {
-		inject.QuotaReservation.Commit(resp.StatusCode)
+	const maxQuotaFailoverAttempts = 4
+	for attempts := 1; resp.StatusCode == http.StatusTooManyRequests && inject.QuotaReservation != nil && !canStream && attempts < maxQuotaFailoverAttempts; attempts++ {
 		inject.QuotaReservation.Cooldown(retryAfterDuration(resp.Header.Get("Retry-After")))
 		inject.QuotaReservation.Release()
 
 		retryInject, retryErr := p.creds.Inject(r.Context(), scope.VaultID, host, port, r.Method, r.URL.Path)
-		if retryErr == nil && retryInject != nil && retryInject.Headers != nil {
-			retryReq := outReq.Clone(outReq.Context())
-			for k, v := range retryInject.Headers {
-				retryReq.Header.Set(k, v)
-			}
-			retryReq.Body = http.NoBody
-			retryReq.ContentLength = 0
-			if retryResp, retryRTErr := p.upstream.RoundTrip(retryReq); retryRTErr == nil {
-				_ = resp.Body.Close()
-				resp = retryResp
-				event.AccountID = retryInject.AccountID
-				event.CredentialKeys = retryInject.CredentialKeys
-				inject = retryInject
-				p.logger.Debug("egress quota 429 failover attempted",
-					slog.String("host", host),
-					slog.String("path", r.URL.Path),
-					slog.Int("status", resp.StatusCode),
-				)
-			}
+		if retryErr != nil || retryInject == nil || retryInject.Headers == nil {
+			break
 		}
+		retryReq, buildErr := buildOutReq(retryInject)
+		if buildErr != nil {
+			break
+		}
+		retryResp, retryRTErr := p.upstream.RoundTrip(retryReq)
+		if retryRTErr != nil {
+			_ = retryReq.Body.Close()
+			break
+		}
+		_ = resp.Body.Close()
+		resp = retryResp
+		event.AccountID = retryInject.AccountID
+		event.CredentialKeys = retryInject.CredentialKeys
+		inject = retryInject
+		p.logger.Debug("egress quota 429 failover attempted",
+			slog.String("host", host),
+			slog.String("path", r.URL.Path),
+			slog.Int("status", resp.StatusCode),
+		)
 	}
 
 	// OAuth 401 retry: if the upstream rejected the token and we have an

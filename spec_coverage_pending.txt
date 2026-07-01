@@ -170,6 +170,19 @@ Completed:
 Pending:
 - None for `fix-quota-ui-account-usage`; ready to archive.
 
+fix-quota-failover-replay coverage
+
+Completed:
+- Account-pool MITM requests now materialize request bodies so upstream 429 failover can rebuild fresh outbound attempts.
+- Failover retries preserve method, URL, headers, and body while applying the next account's injection.
+- Failed reservations are cooled down and released before selecting the next account; only the final returned attempt is committed.
+- Retry attempts stop when no next account is available and remain bounded by a hard maximum.
+- Tests cover GET failover metadata, POST body replay, PUT body replay, exhausted account failover, and oversized account-pool request rejection.
+- Docs describe replay behavior and final-attempt quota accounting.
+
+Pending:
+- None for `fix-quota-failover-replay`; ready to archive.
+
 add-quota-ui coverage
 
 Completed:

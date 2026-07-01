@@ -43,6 +43,15 @@ fix-quota-ui-account-usage progress
   previous generic configured fallback.
 - Coverage updated for API/UI usage visibility.
 
+fix-quota-failover-replay progress
+
+- Account-pool 429 failover now rebuilds replayable requests with fresh body
+  readers, preserving POST/PUT bodies across account retries.
+- Failed reservations are cooled down and released before selecting the next
+  account; only the final returned attempt is committed to quota usage.
+- Failover exits when no next account is available and remains hard-bounded.
+- Docs and coverage updated for replay behavior.
+
 Verification:
 - `/usr/local/bin/go test ./internal/mailproxy`
 - `/usr/local/bin/go test ./cmd ./internal/server ./internal/broker`
@@ -64,3 +73,8 @@ Verification:
 - `go test ./internal/server`
 - `npm run build --prefix web`
 - `openspec validate fix-quota-ui-account-usage --strict`
+- `go test ./internal/mitm`
+- `go test ./internal/mitm ./internal/brokercore ./internal/egressquota`
+- `openspec validate fix-quota-failover-replay --strict`
+- `git diff --check`
+- `openspec validate --specs --strict`
