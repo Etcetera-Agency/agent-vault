@@ -37,17 +37,17 @@
 
 ## 5. Slice 4: Hygiene And Docs
 
-- [ ] 5.1 Remove trailing whitespace from `openspec/agent-vault-hermes-gmail-imap-smtp-proxy-patch-v1.0.0.md`.
-- [ ] 5.2 Update `docs/guides/hermes-gmail-mail-proxy.mdx` with the new CLI toggle command.
-- [ ] 5.3 Update `openspec/TODO.md` if implementation discovers more deferred work.
-- [ ] 5.4 Run `git diff --check`.
-- [ ] 5.5 Use Code Simplifier for this slice.
+- [x] 5.1 Remove trailing whitespace from `openspec/agent-vault-hermes-gmail-imap-smtp-proxy-patch-v1.0.0.md`.
+- [x] 5.2 Update `docs/guides/hermes-gmail-mail-proxy.mdx` with the new CLI toggle command.
+- [x] 5.3 Update `openspec/TODO.md` if implementation discovers more deferred work.
+- [x] 5.4 Run `git diff --check`.
+- [x] 5.5 Use Code Simplifier for this slice.
 
 ## 6. Final Verification
 
-- [ ] 6.1 Run `/usr/local/bin/go test ./...`.
-- [ ] 6.2 Run `npm run build --prefix web`.
-- [ ] 6.3 Run `openspec validate fix-mail-proxy-review-gaps --strict`.
-- [ ] 6.4 Run `openspec validate --specs --strict`.
-- [ ] 6.5 Update `completion.review` after fixes.
-- [ ] 6.6 Archive after user approval and successful verification.
+- [x] 6.1 Run `/usr/local/bin/go test ./...`.
+- [x] 6.2 Run `npm run build --prefix web`.
+- [x] 6.3 Run `openspec validate fix-mail-proxy-review-gaps --strict`.
+- [x] 6.4 Run `openspec validate --specs --strict`.
+- [x] 6.5 Update `completion.review` after fixes.
+- [x] 6.6 Archive after user approval and successful verification.

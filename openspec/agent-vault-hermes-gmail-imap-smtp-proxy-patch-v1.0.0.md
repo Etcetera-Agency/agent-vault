@@ -1,7 +1,7 @@
 # Agent Vault Mail Proxy Patch for Hermes
 
-**Version:** 1.0.0  
-**Target:** `Infisical/agent-vault`  
+**Version:** 1.0.0
+**Target:** `Infisical/agent-vault`
 **Purpose:** allow the unmodified Hermes Email Gateway to use Gmail IMAP/SMTP through Google OAuth 2.0 without exposing Google OAuth tokens or an app password to Hermes.
 
 ## 1. Goal

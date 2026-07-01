@@ -3,7 +3,16 @@ fix-mail-proxy-review-gaps progress
 - Slice 1 fixed controlled shutdown: active IMAP/SMTP proxy connections are tracked by `mailproxy.Proxy` and closed after `ShutdownTimeout`; focused mailproxy tests cover stuck active sessions.
 - Slice 2 fixed SMTP upstream TLS verification: STARTTLS `ServerName` now comes from the configured SMTP upstream host, with default Gmail behavior preserved.
 - Slice 3 added the existing-service mail proxy toggle CLI: `vault service mail-proxy set <service>` mutates only `mail_proxy` fields on an exact service-name match and preserves unrelated service fields.
+- Slice 4 cleaned the Hermes mail proxy patch whitespace and documented the new CLI toggle command in the Hermes Gmail guide.
+- Archive prep removed non-normative `Previous` notes from MODIFIED deltas so OpenSpec can merge them into the living mail-proxy spec.
+- OpenSpec archived `fix-mail-proxy-review-gaps` into `openspec/changes/archive/2026-07-01-fix-mail-proxy-review-gaps`.
 
 Verification:
 - `/usr/local/bin/go test ./internal/mailproxy`
 - `/usr/local/bin/go test ./cmd ./internal/server ./internal/broker`
+- `git diff --check`
+- `/usr/local/bin/go test ./...`
+- `npm run build --prefix web`
+- `openspec validate fix-mail-proxy-review-gaps --strict`
+- `openspec validate --specs --strict`
+- `openspec validate --all --strict`

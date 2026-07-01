@@ -52,8 +52,6 @@ AND does not update the service allowlist.
 
 ### Requirement: Gmail SMTP XOAUTH2 Relay
 
-**Previous**: SMTP upstream STARTTLS was required, but the spec did not state how TLS verification chooses the upstream server name when the SMTP upstream address is configured.
-
 WHEN Hermes authenticates to the local SMTP proxy, the system SHALL authenticate upstream to Gmail SMTP with XOAUTH2, verify upstream STARTTLS against the configured SMTP upstream host, and then relay SMTP bytes transparently.
 
 #### Scenario: SMTP Auth Establishes Gmail Session
@@ -82,8 +80,6 @@ THEN the system relays raw bytes between Hermes and Gmail
 AND Gmail remains responsible for sender validation, quotas, and delivery behavior.
 
 ### Requirement: Controlled Shutdown
-
-**Previous**: The mail proxy was required to close remaining connections after timeout, but implementation tasks did not explicitly require tracking and closing active relay sockets.
 
 WHEN the mail proxy receives a termination signal, the system SHALL stop accepting new sessions, allow active relays a bounded grace period, close active relay connections after the grace period, and release sensitive state.
 

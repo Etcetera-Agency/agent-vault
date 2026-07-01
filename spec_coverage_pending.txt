@@ -1,4 +1,4 @@
-fix-mail-proxy-review-gaps pending coverage
+fix-mail-proxy-review-gaps archived coverage
 
 Completed:
 - Controlled shutdown review gap:
@@ -12,6 +12,9 @@ Completed:
   - creates a `mail_proxy` block on an existing service without one
   - rejects no-op calls without fetching or updating services
   - rejects missing service names without updating the service allowlist
+- Hygiene and docs:
+  - concept patch trailing whitespace removed
+  - Hermes Gmail mail proxy guide documents the CLI toggle command
 - Shared OAuth access token resolver:
   - valid token returned without refresh
   - five-minute-buffer refresh
@@ -66,4 +69,4 @@ Completed:
   - Hermes Gmail guide with scope, credentials, CA trust, and env setup
 
 Pending:
-- Hygiene/docs cleanup must remove concept patch trailing whitespace and document the CLI toggle command.
+- None for `fix-mail-proxy-review-gaps`; change archived on 2026-07-01.

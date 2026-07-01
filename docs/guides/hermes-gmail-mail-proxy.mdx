@@ -34,6 +34,22 @@ services:
 
 `HERMES_MAIL_LOCAL_PASSWORD` is a static Agent Vault credential. It is not a Gmail password.
 
+To update mail proxy fields on an existing service without replacing unrelated service policy, use:
+
+```bash
+agent-vault vault service mail-proxy set gmail-mail \
+  --imap=true \
+  --smtp=true \
+  --email agent@gmail.com \
+  --local-password-credential HERMES_MAIL_LOCAL_PASSWORD
+```
+
+You can update one field at a time. For example, disable only the local IMAP listener policy:
+
+```bash
+agent-vault vault service mail-proxy set gmail-mail --imap=false
+```
+
 ## Run
 
 ```bash
