@@ -82,6 +82,7 @@ func TestResolverResolve_RefreshesWithinFiveMinuteBufferAndPersistsRotation(t *t
 	var refreshCalls int
 	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		refreshCalls++
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		if err := r.ParseForm(); err != nil {
 			t.Fatalf("ParseForm: %v", err)
 		}

@@ -6,6 +6,7 @@
 - Wired `StoreCredentialProvider` to deny before credential lookup/injection when quota is exhausted.
 - Wired MITM responses to return `429`, `X-Vault-Quota-Exhausted`, and `Retry-After`, while releasing concurrency slots and recording forwarded calls.
 - Code Simplifier fix: reordered reserve checks so concurrency denial does not consume an rpm token.
+- Post-merge CI fix: changed quota denial response writing to `fmt.Fprintf` to satisfy staticcheck QF1012.
 
 ## Verification
 
