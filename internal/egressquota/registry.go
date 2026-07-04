@@ -444,7 +444,7 @@ func WriteDenial(w http.ResponseWriter, d *Decision) {
 	w.Header().Set("X-Vault-Quota-Exhausted", d.Service)
 	w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
 	w.WriteHeader(http.StatusTooManyRequests)
-	_, _ = w.Write([]byte(fmt.Sprintf(`{"error":"quota_exhausted","service":%q,"reason":%q}`+"\n", d.Service, d.Reason)))
+	_, _ = fmt.Fprintf(w, `{"error":"quota_exhausted","service":%q,"reason":%q}`+"\n", d.Service, d.Reason)
 }
 
 func reserveRPM(now time.Time, state *limitState, rpm int) time.Duration {

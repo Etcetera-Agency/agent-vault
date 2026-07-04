@@ -6,6 +6,7 @@
 - Extended credential injection so the selected account credential key replaces the primary auth key and is first in logged credential keys for restart seeding.
 - Added bounded upstream-429 failover for replay-safe `GET`/`HEAD` requests using `Retry-After`.
 - Wired SMTP exhaustion notifications through existing vault-member notifier path when SMTP is configured.
+- Post-merge CI fix: bounded OAuth resolver test form parsing with `http.MaxBytesReader` to satisfy gosec G120.
 
 ## Verification
 
