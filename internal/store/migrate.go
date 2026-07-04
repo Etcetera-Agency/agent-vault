@@ -464,7 +464,7 @@ func copyVaultGrants(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect 
 
 func copyCredentials(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect Dialect) (int, error) {
 	rows, err := src.db.QueryContext(ctx,
-		"SELECT id, vault_id, key, type, ciphertext, nonce, created_at, updated_at FROM credentials")
+		"SELECT id, vault_id, key, type, pool_provider, ciphertext, nonce, created_at, updated_at FROM credentials")
 	if err != nil {
 		return 0, err
 	}
@@ -473,9 +473,10 @@ func copyCredentials(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect 
 	n := 0
 	for rows.Next() {
 		var id, vaultID, key, typ string
+		var poolProvider sql.NullString
 		var ct, nonce []byte
 		var createdAt, updatedAt interface{}
-		if err := rows.Scan(&id, &vaultID, &key, &typ, &ct, &nonce, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&id, &vaultID, &key, &typ, &poolProvider, &ct, &nonce, &createdAt, &updatedAt); err != nil {
 			return n, err
 		}
 		ca, err := convertTime(createdAt, src.dialect, dstDialect)
@@ -487,8 +488,8 @@ func copyCredentials(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect 
 			return n, fmt.Errorf("converting updated_at: %w", err)
 		}
 		_, err = tx.ExecContext(ctx,
-			dstDialect.Rebind("INSERT INTO credentials (id, vault_id, key, type, ciphertext, nonce, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
-			id, vaultID, key, typ, ct, nonce, ca, ua,
+			dstDialect.Rebind("INSERT INTO credentials (id, vault_id, key, type, pool_provider, ciphertext, nonce, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+			id, vaultID, key, typ, nullableString(poolProvider.String), ct, nonce, ca, ua,
 		)
 		if err != nil {
 			return n, err
@@ -1065,7 +1066,7 @@ func copyRequestLogs(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect 
 
 	for {
 		rows, err := src.db.QueryContext(ctx,
-			fmt.Sprintf("SELECT id, vault_id, actor_type, actor_id, ingress, method, host, path, matched_service, credential_keys, status, latency_ms, error_code, created_at, auth_scheme, auth_header FROM request_logs ORDER BY id LIMIT %d OFFSET %d", batchSize, offset))
+			fmt.Sprintf("SELECT id, vault_id, actor_type, actor_id, ingress, method, host, path, matched_service, account_id, credential_keys, status, latency_ms, error_code, created_at, auth_scheme, auth_header FROM request_logs ORDER BY id LIMIT %d OFFSET %d", batchSize, offset))
 		if err != nil {
 			return total, err
 		}
@@ -1074,7 +1075,7 @@ func copyRequestLogs(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect 
 		for rows.Next() {
 			var id int
 			var vaultID, actorType, actorID, ingress, method, host, path string
-			var matchedService, credKeys string
+			var matchedService, accountID, credKeys string
 			var status, latencyMs int
 			var errorCode string
 			var createdAt interface{}
@@ -1082,7 +1083,7 @@ func copyRequestLogs(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect 
 
 			if err := rows.Scan(
 				&id, &vaultID, &actorType, &actorID, &ingress, &method, &host, &path,
-				&matchedService, &credKeys, &status, &latencyMs, &errorCode,
+				&matchedService, &accountID, &credKeys, &status, &latencyMs, &errorCode,
 				&createdAt, &authScheme, &authHeader,
 			); err != nil {
 				_ = rows.Close()
@@ -1098,11 +1099,11 @@ func copyRequestLogs(ctx context.Context, src *SQLStore, tx *sql.Tx, dstDialect 
 			_, err = tx.ExecContext(ctx,
 				dstDialect.Rebind(`INSERT INTO request_logs
 					(id, vault_id, actor_type, actor_id, ingress, method, host, path,
-					 matched_service, credential_keys, status, latency_ms, error_code,
+					 matched_service, account_id, credential_keys, status, latency_ms, error_code,
 					 created_at, auth_scheme, auth_header)
-					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+					VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
 				id, vaultID, actorType, actorID, ingress, method, host, path,
-				matchedService, credKeys, status, latencyMs, errorCode,
+				matchedService, accountID, credKeys, status, latencyMs, errorCode,
 				ca, authScheme, authHeader,
 			)
 			if err != nil {

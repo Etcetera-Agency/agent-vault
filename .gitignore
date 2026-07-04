@@ -34,3 +34,6 @@ secrets.yaml
 *.tgz
 
 .DS_Store
+__pycache__/
+*.py[cod]
+*$py.class

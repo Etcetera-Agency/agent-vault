@@ -1,0 +1,12 @@
+# Completion Review: add-service-quota-config
+
+## Fixed During Implementation
+
+- Added quota/account/rotation fields to `broker.Service`; implementation location is `internal/broker`, not `internal/catalog`.
+- Added account credential-key existence checks in service POST/PUT APIs using vault credential keys only; credential values are never read or returned.
+- Added deterministic quota validation and skipped credential-list lookup when services have no account pool.
+
+## Verification
+
+- `openspec validate add-service-quota-config --strict`
+- `go test ./internal/broker ./internal/server`

@@ -13,6 +13,7 @@ func init() {
 		return db.Exec(postgresBaselineSQL).Error
 	})
 }
+
 // postgresBaselineSQL creates the full Postgres schema equivalent to
 // SQLite migrations 001-050. Embedded as a raw SQL string because
 // defining 20+ GORM model structs just for a one-time baseline is
@@ -30,6 +31,7 @@ CREATE TABLE credentials (
     vault_id   TEXT NOT NULL REFERENCES vaults(id) ON DELETE CASCADE,
     key        TEXT NOT NULL,
     type       TEXT NOT NULL DEFAULT 'static',
+    pool_provider TEXT DEFAULT NULL,
     ciphertext BYTEA NOT NULL,
     nonce      BYTEA NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -194,6 +196,7 @@ CREATE TABLE request_logs (
     host            TEXT NOT NULL,
     path            TEXT NOT NULL,
     matched_service TEXT NOT NULL DEFAULT '',
+    account_id      TEXT NOT NULL DEFAULT '',
     credential_keys TEXT NOT NULL DEFAULT '[]',
     status          INTEGER NOT NULL DEFAULT 0,
     latency_ms      INTEGER NOT NULL DEFAULT 0,

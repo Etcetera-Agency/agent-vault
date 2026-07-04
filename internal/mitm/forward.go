@@ -1,6 +1,7 @@
 package mitm
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Infisical/agent-vault/internal/brokercore"
+	"github.com/Infisical/agent-vault/internal/egressquota"
 	"github.com/Infisical/agent-vault/internal/ratelimit"
 	"github.com/Infisical/agent-vault/internal/requestlog"
 )
@@ -244,10 +246,20 @@ func (p *Proxy) forwardRequest(
 		event.MatchedHost = inject.MatchedHost
 		event.MatchedPath = inject.MatchedPath
 		event.MatchedPort = inject.MatchedPort
+		event.AccountID = inject.AccountID
 		event.CredentialKeys = inject.CredentialKeys
 		event.Passthrough = inject.Passthrough
 	}
 	if err != nil {
+		var quotaErr *brokercore.ErrEgressQuotaExceeded
+		if errors.As(err, &quotaErr) {
+			egressquota.WriteDenial(w, quotaErr.Decision)
+			emit(http.StatusTooManyRequests, "quota_exhausted")
+			return
+		}
+		if inject != nil && inject.QuotaReservation != nil {
+			inject.QuotaReservation.Release()
+		}
 		errCode := "no_match"
 		status := http.StatusForbidden
 		if errors.Is(err, brokercore.ErrCredentialMissing) {
@@ -259,19 +271,39 @@ func (p *Proxy) forwardRequest(
 		emit(status, errCode)
 		return
 	}
-
-	var body io.ReadCloser
-	var contentLength int64
+	if inject.QuotaReservation != nil {
+		defer func() {
+			if inject.QuotaReservation != nil {
+				inject.QuotaReservation.Release()
+			}
+		}()
+	}
 
 	hasSubs := brokercore.HasBodySubstitutions(inject.Substitutions)
-	canStream := !hasSubs && r.ContentLength >= 0
+	accountPoolRequest := inject.AccountID != "" && inject.QuotaReservation != nil
+	// AICODE-NOTE: Account-pool requests must be materialized so 429 failover can rebuild each attempt with a fresh body.
+	canStream := !hasSubs && !accountPoolRequest && r.ContentLength >= 0
 
+	var bodyBytes []byte
+	var streamBody io.ReadCloser
+	var contentLength int64
 	if canStream {
-		body = r.Body
+		streamBody = r.Body
 		contentLength = r.ContentLength
 	} else {
 		r.Body = http.MaxBytesReader(w, r.Body, brokercore.MaxMaterializeBytes)
-		body, contentLength, err = brokercore.MaterializeRequestBody(r.Body)
+		materialized, materializedLen, matErr := brokercore.MaterializeRequestBody(r.Body)
+		if matErr != nil {
+			status, code := brokercore.RequestBodyErrorCode(matErr)
+			http.Error(w, http.StatusText(status), status)
+			emit(status, code)
+			return
+		}
+		contentLength = materializedLen
+		if materialized != nil && materialized != http.NoBody {
+			bodyBytes, err = io.ReadAll(materialized)
+			_ = materialized.Close()
+		}
 		if err != nil {
 			status, code := brokercore.RequestBodyErrorCode(err)
 			http.Error(w, http.StatusText(status), status)
@@ -280,49 +312,69 @@ func (p *Proxy) forwardRequest(
 		}
 	}
 
-	outReq, err := http.NewRequestWithContext(r.Context(), r.Method, outURL.String(), body)
-	if err != nil {
-		http.Error(w, "bad gateway", http.StatusBadGateway)
-		emit(http.StatusBadGateway, "internal")
-		return
-	}
-	outReq.Host = hostHeaderForScheme(scheme, target)
-	outReq.ContentLength = contentLength
-
 	wsUpgrade := isWebSocketUpgrade(r)
+	streamUsed := false
+	buildOutReq := func(currentInject *brokercore.InjectResult) (*http.Request, error) {
+		var body io.ReadCloser
+		switch {
+		case canStream:
+			if streamUsed {
+				return nil, fmt.Errorf("stream body already used")
+			}
+			streamUsed = true
+			body = streamBody
+		case len(bodyBytes) > 0:
+			body = io.NopCloser(bytes.NewReader(bodyBytes))
+		default:
+			body = http.NoBody
+		}
 
-	if wsUpgrade {
-		copyWebSocketHandshakeHeaders(r.Header, outReq.Header)
-		brokercore.ApplyInjection(r.Header, outReq.Header, inject, websocketHandshakeHeaderNames...)
-	} else {
-		brokercore.ApplyInjection(r.Header, outReq.Header, inject)
+		outReq, err := http.NewRequestWithContext(r.Context(), r.Method, outURL.String(), body)
+		if err != nil {
+			return nil, err
+		}
+		outReq.Host = hostHeaderForScheme(scheme, target)
+		outReq.ContentLength = contentLength
+
+		if wsUpgrade {
+			copyWebSocketHandshakeHeaders(r.Header, outReq.Header)
+			brokercore.ApplyInjection(r.Header, outReq.Header, currentInject, websocketHandshakeHeaderNames...)
+		} else {
+			brokercore.ApplyInjection(r.Header, outReq.Header, currentInject)
+		}
+
+		if err := brokercore.ApplySubstitutions(outReq.URL, outReq.Header, currentInject.Substitutions); err != nil {
+			_ = outReq.Body.Close()
+			return nil, err
+		}
+
+		if ce := outReq.Header.Get("Content-Encoding"); ce != "" {
+			p.logger.Debug("skipping body substitution for compressed request",
+				slog.String("content_encoding", ce),
+				slog.String("host", host),
+			)
+		} else {
+			newBody, newLen, modified, bErr := brokercore.ApplyBodySubstitutions(
+				outReq.Body, outReq.ContentLength,
+				outReq.Header.Get("Content-Type"), currentInject.Substitutions)
+			if bErr != nil {
+				_ = outReq.Body.Close()
+				return nil, bErr
+			}
+			outReq.Body = newBody
+			if modified {
+				outReq.ContentLength = newLen
+				outReq.Header.Set("Content-Length", fmt.Sprintf("%d", newLen))
+			}
+		}
+		return outReq, nil
 	}
 
-	if err := brokercore.ApplySubstitutions(outReq.URL, outReq.Header, inject.Substitutions); err != nil {
+	outReq, err := buildOutReq(inject)
+	if err != nil {
 		http.Error(w, "bad gateway", http.StatusBadGateway)
 		emit(http.StatusBadGateway, "substitution_error")
 		return
-	}
-
-	if ce := outReq.Header.Get("Content-Encoding"); ce != "" {
-		p.logger.Debug("skipping body substitution for compressed request",
-			slog.String("content_encoding", ce),
-			slog.String("host", host),
-		)
-	} else {
-		newBody, newLen, modified, bErr := brokercore.ApplyBodySubstitutions(
-			outReq.Body, outReq.ContentLength,
-			outReq.Header.Get("Content-Type"), inject.Substitutions)
-		if bErr != nil {
-			http.Error(w, "bad gateway", http.StatusBadGateway)
-			emit(http.StatusBadGateway, "substitution_error")
-			return
-		}
-		outReq.Body = newBody
-		if modified {
-			outReq.ContentLength = newLen
-			outReq.Header.Set("Content-Length", fmt.Sprintf("%d", newLen))
-		}
 	}
 
 	if wsUpgrade {
@@ -345,6 +397,36 @@ func (p *Proxy) forwardRequest(
 		http.Error(w, "bad gateway", http.StatusBadGateway)
 		emit(http.StatusBadGateway, "upstream_error")
 		return
+	}
+
+	const maxQuotaFailoverAttempts = 4
+	for attempts := 1; resp.StatusCode == http.StatusTooManyRequests && inject.QuotaReservation != nil && !canStream && attempts < maxQuotaFailoverAttempts; attempts++ {
+		inject.QuotaReservation.Cooldown(retryAfterDuration(resp.Header.Get("Retry-After")))
+		inject.QuotaReservation.Release()
+
+		retryInject, retryErr := p.creds.Inject(r.Context(), scope.VaultID, host, port, r.Method, r.URL.Path)
+		if retryErr != nil || retryInject == nil || retryInject.Headers == nil {
+			break
+		}
+		retryReq, buildErr := buildOutReq(retryInject)
+		if buildErr != nil {
+			break
+		}
+		retryResp, retryRTErr := p.upstream.RoundTrip(retryReq)
+		if retryRTErr != nil {
+			_ = retryReq.Body.Close()
+			break
+		}
+		_ = resp.Body.Close()
+		resp = retryResp
+		event.AccountID = retryInject.AccountID
+		event.CredentialKeys = retryInject.CredentialKeys
+		inject = retryInject
+		p.logger.Debug("egress quota 429 failover attempted",
+			slog.String("host", host),
+			slog.String("path", r.URL.Path),
+			slog.Int("status", resp.StatusCode),
+		)
 	}
 
 	// OAuth 401 retry: if the upstream rejected the token and we have an
@@ -373,6 +455,9 @@ func (p *Proxy) forwardRequest(
 	}
 
 	defer func() { _ = resp.Body.Close() }()
+	if inject.QuotaReservation != nil {
+		inject.QuotaReservation.Commit(resp.StatusCode)
+	}
 
 	if p.maxResponseBytes > 0 && resp.ContentLength > 0 && resp.ContentLength > p.maxResponseBytes {
 		_ = resp.Body.Close()
@@ -388,7 +473,6 @@ func (p *Proxy) forwardRequest(
 		emit(http.StatusBadGateway, "response_too_large")
 		return
 	}
-
 	for k, vv := range resp.Header {
 		if brokercore.ShouldStripResponseHeader(k) {
 			continue
@@ -424,6 +508,24 @@ func (p *Proxy) forwardRequest(
 	}
 
 	emit(resp.StatusCode, "")
+}
+
+func retryAfterDuration(raw string) time.Duration {
+	if raw == "" {
+		return time.Minute
+	}
+	if seconds, err := strconv.Atoi(raw); err == nil {
+		if seconds < 1 {
+			seconds = 1
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(raw); err == nil {
+		if d := time.Until(when); d > 0 {
+			return d
+		}
+	}
+	return time.Minute
 }
 
 // knownAPIKeyHeaders are non-Authorization headers that commonly carry

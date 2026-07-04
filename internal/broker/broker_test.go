@@ -1043,6 +1043,61 @@ func TestServiceCredentialKeysOnlyAuth(t *testing.T) {
 	}
 }
 
+func TestServiceCredentialKeysIncludesAccounts(t *testing.T) {
+	s := Service{
+		Host: "api.example.com",
+		Auth: Auth{Type: "bearer", Token: "PRIMARY_KEY"},
+		Accounts: []ServiceAccount{
+			{ID: "acct1", CredentialKey: "PRIMARY_KEY"},
+			{ID: "acct2", CredentialKey: "SECONDARY_KEY"},
+		},
+	}
+	keys := s.CredentialKeys()
+	if len(keys) != 2 || keys[0] != "PRIMARY_KEY" || keys[1] != "SECONDARY_KEY" {
+		t.Fatalf("expected auth key then unique account key, got %v", keys)
+	}
+}
+
+func TestValidateQuotaConfigAllowsPartialAndEmpty(t *testing.T) {
+	monthly := 100000
+	cfg := Config{Vault: "default", Services: []Service{
+		{Name: "apify", Host: "api.apify.com", Auth: Auth{Type: "bearer", Token: "APIFY_TOKEN"}, Quota: &ServiceQuota{MonthlyCap: &monthly}},
+		{Name: "internal-status", Host: "status.example.com", Auth: Auth{Type: "passthrough"}},
+	}}
+	if err := Validate(&cfg); err != nil {
+		t.Fatalf("expected partial quota and empty quota to validate, got %v", err)
+	}
+}
+
+func TestValidateQuotaConfigRejectsInvalid(t *testing.T) {
+	daily := 5000
+	monthly := 1000
+	cfg := Config{Vault: "default", Services: []Service{{
+		Name:  "apify",
+		Host:  "api.apify.com",
+		Auth:  Auth{Type: "bearer", Token: "APIFY_TOKEN"},
+		Quota: &ServiceQuota{DailyCap: &daily, MonthlyCap: &monthly},
+	}}}
+	if err := Validate(&cfg); err == nil || !strings.Contains(err.Error(), "monthly_cap") {
+		t.Fatalf("expected monthly_cap validation error, got %v", err)
+	}
+
+	cfg.Services[0].Quota = nil
+	cfg.Services[0].Accounts = []ServiceAccount{
+		{ID: "acct1", CredentialKey: "APIFY_TOKEN_1"},
+		{ID: "acct1", CredentialKey: "APIFY_TOKEN_2"},
+	}
+	if err := Validate(&cfg); err == nil || !strings.Contains(err.Error(), "duplicate id") {
+		t.Fatalf("expected duplicate account validation error, got %v", err)
+	}
+
+	cfg.Services[0].Accounts = nil
+	cfg.Services[0].Rotation = "random"
+	if err := Validate(&cfg); err == nil || !strings.Contains(err.Error(), "rotation") {
+		t.Fatalf("expected rotation validation error, got %v", err)
+	}
+}
+
 func TestAnyHostMatches(t *testing.T) {
 	services := []Service{
 		{Host: "api.stripe.com", Auth: Auth{Type: "bearer", Token: "K"}},

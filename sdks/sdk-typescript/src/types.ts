@@ -61,6 +61,7 @@ export interface VaultDeleted {
 export interface CredentialEntry {
   key: string;
   value?: string;
+  pool_provider?: string;
 }
 
 /** @internal Wire format for GET /v1/credentials response. */

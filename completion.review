@@ -7,6 +7,51 @@ fix-mail-proxy-review-gaps progress
 - Archive prep removed non-normative `Previous` notes from MODIFIED deltas so OpenSpec can merge them into the living mail-proxy spec.
 - OpenSpec archived `fix-mail-proxy-review-gaps` into `openspec/changes/archive/2026-07-01-fix-mail-proxy-review-gaps`.
 
+fix-quota-account-identity progress
+
+- Runtime quota state now keys multi-account counters, cooldowns, round-robin
+  cursors, and usage output by `accounts[].id`.
+- Credential lookup/injection still uses `accounts[].credential_key`, with
+  selected account id propagated as non-secret request-log metadata.
+- Request logs persist `account_id`; old rows still seed quota state from
+  credential keys when account id is absent.
+- Docs clarify account id vs credential key semantics.
+
+add-credential-pool-eligibility progress
+
+- Credentials now carry non-secret `pool_provider` metadata, defaulting to not
+  poolable.
+- Services with account pools now require `account_pool_provider`, and every
+  account credential must match that provider.
+- Credential/service UI and TypeScript SDK types expose the pool metadata.
+- Docs and OpenSpec coverage updated for explicit pool opt-in.
+
+add-account-only-rotation progress
+
+- Account pools now activate runtime rotation without numeric quota caps.
+- Empty quota policy applies no daily/monthly/rpm/concurrency limits, while
+  cooldown and usage tracking still work per account id.
+- Quota usage includes account-only services so the UI renders account states
+  instead of generic configured text.
+- Docs and coverage updated for account-only rotation.
+
+fix-quota-ui-account-usage progress
+
+- Account-only usage responses now include account rows, counters, state, and
+  cooling availability without credential values.
+- Services table receives account rows for account-only configs, avoiding the
+  previous generic configured fallback.
+- Coverage updated for API/UI usage visibility.
+
+fix-quota-failover-replay progress
+
+- Account-pool 429 failover now rebuilds replayable requests with fresh body
+  readers, preserving POST/PUT bodies across account retries.
+- Failed reservations are cooled down and released before selecting the next
+  account; only the final returned attempt is committed to quota usage.
+- Failover exits when no next account is available and remains hard-bounded.
+- Docs and coverage updated for replay behavior.
+
 Verification:
 - `/usr/local/bin/go test ./internal/mailproxy`
 - `/usr/local/bin/go test ./cmd ./internal/server ./internal/broker`
@@ -16,3 +61,20 @@ Verification:
 - `openspec validate fix-mail-proxy-review-gaps --strict`
 - `openspec validate --specs --strict`
 - `openspec validate --all --strict`
+- `go test ./internal/egressquota ./internal/brokercore ./internal/mitm ./internal/server`
+- `openspec validate fix-quota-account-identity --strict`
+- `go test ./internal/store ./internal/server ./internal/broker`
+- `npm run build --prefix web`
+- `npm run typecheck --prefix sdks/sdk-typescript`
+- `openspec validate add-credential-pool-eligibility --strict`
+- `go test ./internal/egressquota ./internal/brokercore ./internal/mitm ./internal/server`
+- `npm run build --prefix web`
+- `openspec validate add-account-only-rotation --strict`
+- `go test ./internal/server`
+- `npm run build --prefix web`
+- `openspec validate fix-quota-ui-account-usage --strict`
+- `go test ./internal/mitm`
+- `go test ./internal/mitm ./internal/brokercore ./internal/egressquota`
+- `openspec validate fix-quota-failover-replay --strict`
+- `git diff --check`
+- `openspec validate --specs --strict`

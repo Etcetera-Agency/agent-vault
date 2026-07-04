@@ -1,0 +1,16 @@
+# Completion Review
+
+## Code Simplifier Pass
+
+- Removed stale `rotation` preservation when all account rows are removed; saved services now drop account rotation when no account pool remains.
+- Split the inline quota/account form into local `QuotaEditor` and `AccountPoolEditor` components to match the spec and reduce `ServiceModal` complexity.
+- Reflowed quota usage response construction for readability and added an `AICODE-NOTE` anchor on the no-secret usage surface.
+
+## Verification
+
+- `npm run build`
+- `go test ./internal/egressquota ./internal/brokercore ./internal/mitm ./internal/server ./cmd`
+
+## Result
+
+- No deferred work remains for `add-quota-ui`.

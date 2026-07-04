@@ -15,8 +15,13 @@ import (
 )
 
 type credentialsSetRequest struct {
-	Vault       string            `json:"vault"`
-	Credentials map[string]string `json:"credentials"`
+	Vault       string                        `json:"vault"`
+	Credentials map[string]string             `json:"credentials"`
+	Metadata    map[string]credentialMetadata `json:"metadata,omitempty"`
+}
+
+type credentialMetadata struct {
+	PoolProvider string `json:"pool_provider,omitempty"`
 }
 
 type credentialsSetResponse struct {
@@ -32,8 +37,8 @@ func (s *Server) handleCredentialsSet(w http.ResponseWriter, r *http.Request) {
 	if req.Vault == "" {
 		req.Vault = store.DefaultVault
 	}
-	if len(req.Credentials) == 0 {
-		jsonError(w, http.StatusBadRequest, "Credentials map is required")
+	if len(req.Credentials) == 0 && len(req.Metadata) == 0 {
+		jsonError(w, http.StatusBadRequest, "Credentials map or metadata is required")
 		return
 	}
 
@@ -60,6 +65,12 @@ func (s *Server) handleCredentialsSet(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	for key := range req.Metadata {
+		if !broker.CredentialKeyPattern.MatchString(key) {
+			jsonError(w, http.StatusBadRequest, fmt.Sprintf("Invalid credential key %q: must be SCREAMING_SNAKE_CASE (e.g. STRIPE_KEY)", key))
+			return
+		}
+	}
 
 	var setKeys []string
 	for key, value := range req.Credentials {
@@ -70,6 +81,22 @@ func (s *Server) handleCredentialsSet(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := s.store.SetCredential(ctx, ns.ID, key, ciphertext, nonce); err != nil {
 			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to set credential %q", key))
+			return
+		}
+		if meta, ok := req.Metadata[key]; ok {
+			if err := s.store.UpdateCredentialPoolProvider(ctx, ns.ID, key, meta.PoolProvider); err != nil {
+				jsonError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to update credential %q metadata", key))
+				return
+			}
+		}
+		setKeys = append(setKeys, key)
+	}
+	for key, meta := range req.Metadata {
+		if _, ok := req.Credentials[key]; ok {
+			continue
+		}
+		if err := s.store.UpdateCredentialPoolProvider(ctx, ns.ID, key, meta.PoolProvider); err != nil {
+			jsonError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to update credential %q metadata", key))
 			return
 		}
 		setKeys = append(setKeys, key)
@@ -83,6 +110,7 @@ func (s *Server) handleCredentialsSet(w http.ResponseWriter, r *http.Request) {
 type credentialEntry struct {
 	Key              string  `json:"key"`
 	Type             string  `json:"type,omitempty"`
+	PoolProvider     string  `json:"pool_provider,omitempty"`
 	Value            string  `json:"value,omitempty"`
 	ConnectedAt      *string `json:"connected_at,omitempty"`
 	LastRefreshedAt  *string `json:"last_refreshed_at,omitempty"`
@@ -147,7 +175,7 @@ func (s *Server) handleCredentialsList(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusNotFound, fmt.Sprintf("Credential %q not found", keyFilter))
 			return
 		}
-		entry := credentialEntry{Key: cred.Key, Type: cred.Type}
+		entry := credentialEntry{Key: cred.Key, Type: cred.Type, PoolProvider: cred.PoolProvider}
 		if cred.Type == "oauth" && len(cred.Ciphertext) == 0 {
 			entry.Value = ""
 		} else {
@@ -179,7 +207,7 @@ func (s *Server) handleCredentialsList(w http.ResponseWriter, r *http.Request) {
 	isMember := s.isMemberOrAbove(r, ns.ID)
 	for i, cred := range creds {
 		keys[i] = cred.Key
-		entries[i] = credentialEntry{Key: cred.Key, Type: cred.Type}
+		entries[i] = credentialEntry{Key: cred.Key, Type: cred.Type, PoolProvider: cred.PoolProvider}
 
 		if reveal {
 			if cred.Type == "oauth" && len(cred.Ciphertext) == 0 {

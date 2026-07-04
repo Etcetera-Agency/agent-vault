@@ -17,7 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/brokercore"
+	"github.com/Infisical/agent-vault/internal/egressquota"
 	"github.com/Infisical/agent-vault/internal/netguard"
 	"github.com/Infisical/agent-vault/internal/ratelimit"
 	"github.com/Infisical/agent-vault/internal/requestlog"
@@ -155,6 +157,232 @@ func TestMITMForwardPlainHTTPInjectsCredentials(t *testing.T) {
 	if sawHost != upstreamAuthority {
 		t.Errorf("upstream Host = %q, want %q", sawHost, upstreamAuthority)
 	}
+}
+
+func TestMITMForwardFailsOverOnUpstreamQuota429(t *testing.T) {
+	var saw []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		saw = append(saw, auth)
+		if auth == "Bearer first" {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+			return
+		}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+
+	upstreamAuthority := strings.TrimPrefix(upstream.URL, "http://")
+	reg := egressquota.New()
+	firstReservation := reserveAccountForForwardTest(t, reg)
+	secondReservation := reserveAccountForForwardTest(t, reg)
+	cp := &fakeCredProvider{sequence: []fakeInjectResult{
+		{result: &brokercore.InjectResult{
+			Headers:          map[string]string{"Authorization": "Bearer first"},
+			AccountID:        "acct1",
+			CredentialKeys:   []string{"APIFY_TOKEN_1"},
+			QuotaReservation: firstReservation,
+		}},
+		{result: &brokercore.InjectResult{
+			Headers:          map[string]string{"Authorization": "Bearer second"},
+			AccountID:        "acct2",
+			CredentialKeys:   []string{"APIFY_TOKEN_2"},
+			QuotaReservation: secondReservation,
+		}},
+	}}
+	sr := validTokenResolver("av_sess_ok",
+		&brokercore.ProxyScope{VaultID: "v1", VaultName: "default", VaultRole: "proxy"})
+	proxyURL, clientRoots, _ := setupProxy(t, sr, cp)
+	client := newTrustingClient(proxyURL, url.User("av_sess_ok"), clientRoots)
+
+	resp, err := client.Get("http://" + upstreamAuthority + "/quota")
+	if err != nil {
+		t.Fatalf("client.Get: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != "ok" {
+		t.Fatalf("status/body = %d %q, want 200 ok", resp.StatusCode, body)
+	}
+	if strings.Join(saw, ",") != "Bearer first,Bearer second" {
+		t.Fatalf("upstream auth sequence = %v", saw)
+	}
+}
+
+func TestMITMForwardFailsOverPostWithBodyPreserved(t *testing.T) {
+	testMITMForwardFailsOverWithBodyPreserved(t, http.MethodPost)
+}
+
+func TestMITMForwardFailsOverPutWithBodyPreserved(t *testing.T) {
+	testMITMForwardFailsOverWithBodyPreserved(t, http.MethodPut)
+}
+
+func testMITMForwardFailsOverWithBodyPreserved(t *testing.T, method string) {
+	t.Helper()
+
+	var saw []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		auth := r.Header.Get("Authorization")
+		saw = append(saw, r.Method+":"+string(body)+":"+auth)
+		if auth == "Bearer first" {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+			return
+		}
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+
+	upstreamAuthority := strings.TrimPrefix(upstream.URL, "http://")
+	reg := egressquota.New()
+	firstReservation := reserveAccountForForwardTest(t, reg)
+	secondReservation := reserveAccountForForwardTest(t, reg)
+	cp := &fakeCredProvider{sequence: []fakeInjectResult{
+		{result: &brokercore.InjectResult{
+			Headers:          map[string]string{"Authorization": "Bearer first"},
+			AccountID:        "acct1",
+			CredentialKeys:   []string{"APIFY_TOKEN_1"},
+			QuotaReservation: firstReservation,
+		}},
+		{result: &brokercore.InjectResult{
+			Headers:          map[string]string{"Authorization": "Bearer second"},
+			AccountID:        "acct2",
+			CredentialKeys:   []string{"APIFY_TOKEN_2"},
+			QuotaReservation: secondReservation,
+		}},
+	}}
+	sr := validTokenResolver("av_sess_ok",
+		&brokercore.ProxyScope{VaultID: "v1", VaultName: "default", VaultRole: "proxy"})
+	proxyURL, clientRoots, _ := setupProxy(t, sr, cp)
+	client := newTrustingClient(proxyURL, url.User("av_sess_ok"), clientRoots)
+
+	req, err := http.NewRequest(method, "http://"+upstreamAuthority+"/quota", strings.NewReader(`{"task":"run"}`))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(body) != "ok" {
+		t.Fatalf("status/body = %d %q, want 200 ok", resp.StatusCode, body)
+	}
+
+	want := method + `:{"task":"run"}:Bearer first,` + method + `:{"task":"run"}:Bearer second`
+	if strings.Join(saw, ",") != want {
+		t.Fatalf("upstream attempts = %v, want %s", saw, want)
+	}
+}
+
+func TestMITMForwardStopsAfterAccountFailoverExhausted(t *testing.T) {
+	var saw []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		auth := r.Header.Get("Authorization")
+		saw = append(saw, string(body)+":"+auth)
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+	}))
+	defer upstream.Close()
+
+	upstreamAuthority := strings.TrimPrefix(upstream.URL, "http://")
+	reg := egressquota.New()
+	cp := &fakeCredProvider{sequence: []fakeInjectResult{
+		{result: &brokercore.InjectResult{
+			Headers:          map[string]string{"Authorization": "Bearer first"},
+			AccountID:        "acct1",
+			CredentialKeys:   []string{"APIFY_TOKEN_1"},
+			QuotaReservation: reserveAccountForForwardTest(t, reg),
+		}},
+		{result: &brokercore.InjectResult{
+			Headers:          map[string]string{"Authorization": "Bearer second"},
+			AccountID:        "acct2",
+			CredentialKeys:   []string{"APIFY_TOKEN_2"},
+			QuotaReservation: reserveAccountForForwardTest(t, reg),
+		}},
+		{err: &brokercore.ErrEgressQuotaExceeded{Decision: &egressquota.Decision{
+			Service:    "apify",
+			RetryAfter: time.Minute,
+			Reason:     "all accounts cooled down",
+		}}},
+	}}
+	sr := validTokenResolver("av_sess_ok",
+		&brokercore.ProxyScope{VaultID: "v1", VaultName: "default", VaultRole: "proxy"})
+	proxyURL, clientRoots, _ := setupProxy(t, sr, cp)
+	client := newTrustingClient(proxyURL, url.User("av_sess_ok"), clientRoots)
+
+	resp, err := client.Post("http://"+upstreamAuthority+"/quota", "text/plain", strings.NewReader("payload"))
+	if err != nil {
+		t.Fatalf("client.Post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", resp.StatusCode)
+	}
+	if strings.Join(saw, ",") != "payload:Bearer first,payload:Bearer second" {
+		t.Fatalf("upstream attempts = %v", saw)
+	}
+}
+
+func TestMITMForwardAccountPoolRequestTooLarge(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("upstream must not receive oversized account-pool request")
+	}))
+	defer upstream.Close()
+
+	upstreamAuthority := strings.TrimPrefix(upstream.URL, "http://")
+	upstreamHost := hostFromURL(t, upstream.URL)
+	reg := egressquota.New()
+	cp := &fakeCredProvider{byHost: map[string]fakeInjectResult{
+		upstreamHost: {result: &brokercore.InjectResult{
+			Headers:          map[string]string{"Authorization": "Bearer first"},
+			AccountID:        "acct1",
+			CredentialKeys:   []string{"APIFY_TOKEN_1"},
+			QuotaReservation: reserveAccountForForwardTest(t, reg),
+		}},
+	}}
+	sr := validTokenResolver("av_sess_ok",
+		&brokercore.ProxyScope{VaultID: "v1", VaultName: "default", VaultRole: "proxy"})
+	proxyURL, clientRoots, _ := setupProxy(t, sr, cp, func(o *Options) {
+		o.MaxRequestBytes = 512
+	})
+	client := newTrustingClient(proxyURL, url.User("av_sess_ok"), clientRoots)
+
+	resp, err := client.Post("http://"+upstreamAuthority+"/upload", "application/octet-stream",
+		strings.NewReader(strings.Repeat("X", 1024)))
+	if err != nil {
+		t.Fatalf("client.Post: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413", resp.StatusCode)
+	}
+}
+
+func reserveAccountForForwardTest(t *testing.T, reg *egressquota.Registry) *egressquota.Reservation {
+	t.Helper()
+
+	dailyCap := 10
+	svc := broker.Service{
+		Name:     "apify",
+		Auth:     broker.Auth{Type: "bearer", Token: "APIFY_TOKEN_1"},
+		Quota:    &broker.ServiceQuota{DailyCap: &dailyCap},
+		Rotation: "round_robin",
+		Accounts: []broker.ServiceAccount{
+			{ID: "acct1", CredentialKey: "APIFY_TOKEN_1"},
+			{ID: "acct2", CredentialKey: "APIFY_TOKEN_2"},
+		},
+	}
+	reservation, denial := reg.Reserve(context.Background(), "v1", svc)
+	if denial != nil {
+		t.Fatalf("reserve: %+v", denial)
+	}
+	return reservation
 }
 
 // TestMITMForwardRejectsHTTPSScheme: a client erroneously sending
@@ -491,6 +719,7 @@ func TestMITMForwardEmitsRequestLogRow(t *testing.T) {
 			MatchedName: "upstream-svc",
 			MatchedHost: upstreamHost,
 			MatchedPath: "/v1/*",
+			AccountID:   "acct1",
 			Headers:     map[string]string{"Authorization": "Bearer x"},
 		}},
 	}}
@@ -553,6 +782,9 @@ func TestMITMForwardEmitsRequestLogRow(t *testing.T) {
 	}
 	if row.MatchedPath != "/v1/*" {
 		t.Errorf("MatchedPath = %q, want /v1/*", row.MatchedPath)
+	}
+	if row.AccountID != "acct1" {
+		t.Errorf("AccountID = %q, want acct1", row.AccountID)
 	}
 }
 

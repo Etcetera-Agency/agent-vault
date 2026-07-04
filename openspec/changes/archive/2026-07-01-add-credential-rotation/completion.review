@@ -1,0 +1,13 @@
+# Completion Review: add-credential-rotation
+
+## Fixed During Implementation
+
+- Extended `internal/egressquota` with account candidates, least-used/round-robin ordering, cooldown, selected account metadata, and daily alert dedup.
+- Extended credential injection so the selected account credential key replaces the primary auth key and is first in logged credential keys for restart seeding.
+- Added bounded upstream-429 failover for replay-safe `GET`/`HEAD` requests using `Retry-After`.
+- Wired SMTP exhaustion notifications through existing vault-member notifier path when SMTP is configured.
+
+## Verification
+
+- `openspec validate add-credential-rotation --strict`
+- `go test ./internal/egressquota ./internal/brokercore ./internal/mitm ./internal/server ./cmd`

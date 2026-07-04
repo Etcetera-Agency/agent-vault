@@ -11,6 +11,7 @@ import (
 
 	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/crypto"
+	"github.com/Infisical/agent-vault/internal/egressquota"
 	"github.com/Infisical/agent-vault/internal/oauth"
 	"github.com/Infisical/agent-vault/internal/oauthcredential"
 	"github.com/Infisical/agent-vault/internal/store"
@@ -50,6 +51,10 @@ type InjectResult struct {
 	// errors still carry diagnostic context. Safe to log.
 	CredentialKeys []string
 
+	// AccountID is the selected service account identity for quota
+	// state. Safe to log; never a credential value.
+	AccountID string
+
 	// Substitutions are resolved placeholder rewrites; each entry
 	// carries a SECRET Value — never log placeholder values.
 	Substitutions []ResolvedSubstitution
@@ -57,6 +62,8 @@ type InjectResult struct {
 	// Passthrough is set when no service matched but the unmatched-host
 	// policy permitted forwarding.
 	Passthrough bool
+
+	QuotaReservation *egressquota.Reservation
 }
 
 // CredentialProvider resolves a service for (targetHost, targetMethod,
@@ -96,6 +103,7 @@ type StoreCredentialProvider struct {
 	EncKey     []byte
 	Refresher  *oauth.Refresher          // nil = no OAuth refresh
 	Dynamic    DynamicCredentialResolver // nil = no dynamic-secret resolution
+	Quota      *egressquota.Registry     // nil = no egress quota enforcement
 }
 
 // NewStoreCredentialProvider constructs a provider. encKey must be 32 bytes.
@@ -167,6 +175,32 @@ func (p *StoreCredentialProvider) Inject(ctx context.Context, vaultID, targetHos
 		slog.Int("decl_order", score.DeclOrder),
 	)
 
+	var quotaReservation *egressquota.Reservation
+	selectedAccountID := ""
+	selectedCredentialKey := ""
+	if p.Quota != nil {
+		reservation, denial := p.Quota.Reserve(ctx, vaultID, *matched)
+		if denial != nil {
+			return &InjectResult{
+				MatchedName:    matched.Name,
+				MatchedHost:    matched.Host,
+				MatchedPath:    matched.Path,
+				MatchedPort:    matched.Port,
+				CredentialKeys: matched.CredentialKeys(),
+			}, &ErrEgressQuotaExceeded{Decision: denial}
+		}
+		quotaReservation = reservation
+		if reservation != nil {
+			selectedAccountID = reservation.AccountID()
+			selectedCredentialKey = reservation.CredentialKey()
+		}
+		if selectedCredentialKey != "" {
+			copySvc := *matched
+			copySvc.Auth = accountAuth(copySvc.Auth, selectedCredentialKey)
+			matched = &copySvc
+		}
+	}
+
 	// Memoize per-key lookups so a credential shared by auth and a
 	// substitution decrypts only once.
 	cache := make(map[string]string)
@@ -213,11 +247,13 @@ func (p *StoreCredentialProvider) Inject(ctx context.Context, vaultID, targetHos
 	// Capture non-secret metadata up front so a downstream credential-missing
 	// error still carries it for diagnostic logging.
 	result := &InjectResult{
-		MatchedName:    matched.Name,
-		MatchedHost:    matched.Host,
-		MatchedPath:    matched.Path,
-		MatchedPort:    matched.Port,
-		CredentialKeys: matched.CredentialKeys(),
+		MatchedName:      matched.Name,
+		MatchedHost:      matched.Host,
+		MatchedPath:      matched.Path,
+		MatchedPort:      matched.Port,
+		CredentialKeys:   selectedCredentialKeys(matched.CredentialKeys(), selectedCredentialKey),
+		AccountID:        selectedAccountID,
+		QuotaReservation: quotaReservation,
 	}
 
 	// Resolve substitutions before auth so passthrough services (which
@@ -262,4 +298,32 @@ func (p *StoreCredentialProvider) maybeRefreshOAuth(ctx context.Context, vaultID
 		return "", fmt.Errorf("%w: %v", ErrOAuthRefreshFailed, err)
 	}
 	return token, nil
+}
+
+func accountAuth(auth broker.Auth, accountKey string) broker.Auth {
+	if accountKey == "" {
+		return auth
+	}
+	switch auth.Type {
+	case "bearer":
+		auth.Token = accountKey
+	case "api-key":
+		auth.Key = accountKey
+	case "basic":
+		auth.Username = accountKey
+	}
+	return auth
+}
+
+func selectedCredentialKeys(keys []string, selected string) []string {
+	if selected == "" {
+		return keys
+	}
+	out := []string{selected}
+	for _, key := range keys {
+		if key != selected {
+			out = append(out, key)
+		}
+	}
+	return out
 }

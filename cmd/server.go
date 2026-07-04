@@ -20,6 +20,7 @@ import (
 	"github.com/Infisical/agent-vault/internal/auth"
 	"github.com/Infisical/agent-vault/internal/ca"
 	"github.com/Infisical/agent-vault/internal/crypto"
+	"github.com/Infisical/agent-vault/internal/egressquota"
 	"github.com/Infisical/agent-vault/internal/infisical"
 	"github.com/Infisical/agent-vault/internal/mitm"
 	"github.com/Infisical/agent-vault/internal/notify"
@@ -284,6 +285,7 @@ func attachLogSink(srv *server.Server, db store.Store, logger *slog.Logger) func
 
 	retentionCtx, cancelRetention := context.WithCancel(context.Background())
 	go requestlog.RunRetention(retentionCtx, db, logger)
+	go egressquota.RunReconcile(retentionCtx, srv.EgressQuota(), db, 5*time.Minute)
 
 	return func() {
 		cancelRetention()

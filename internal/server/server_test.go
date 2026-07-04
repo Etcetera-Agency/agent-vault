@@ -18,8 +18,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/Infisical/agent-vault/internal/auth"
+	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/brokercore"
 	"github.com/Infisical/agent-vault/internal/crypto"
+	"github.com/Infisical/agent-vault/internal/egressquota"
 	"github.com/Infisical/agent-vault/internal/infisical"
 	"github.com/Infisical/agent-vault/internal/notify"
 	"github.com/Infisical/agent-vault/internal/store"
@@ -275,6 +277,16 @@ func (m *mockStore) DeleteCredential(_ context.Context, vaultID, key string) err
 	return nil
 }
 
+func (m *mockStore) UpdateCredentialPoolProvider(_ context.Context, vaultID, key, poolProvider string) error {
+	k := vaultID + ":" + key
+	cred, ok := m.credentials[k]
+	if !ok {
+		return fmt.Errorf("credential not found")
+	}
+	cred.PoolProvider = poolProvider
+	return nil
+}
+
 func (m *mockStore) GetVaultByID(_ context.Context, id string) (*store.Vault, error) {
 	for _, ns := range m.vaults {
 		if ns.ID == id {
@@ -389,9 +401,9 @@ func (m *mockStore) ExpirePendingProposals(_ context.Context, before time.Time) 
 	return 0, nil
 }
 
-func (m *mockStore) Close() error                                     { return nil }
-func (m *mockStore) Ping(_ context.Context) error                      { return nil }
-func (m *mockStore) DialectName() string                               { return "sqlite" }
+func (m *mockStore) Close() error                                         { return nil }
+func (m *mockStore) Ping(_ context.Context) error                         { return nil }
+func (m *mockStore) DialectName() string                                  { return "sqlite" }
 func (m *mockStore) GetCAState(_ context.Context) (*store.CAState, error) { return nil, nil }
 func (m *mockStore) SetCAState(_ context.Context, _ *store.CAState) error { return nil }
 
@@ -5950,6 +5962,313 @@ func TestServicesUpsertRoundTripsMethods(t *testing.T) {
 	}
 	if want := []string{"GET", "HEAD"}; !slices.Equal(resp.Services[0].Methods, want) {
 		t.Fatalf("methods = %v, want %v", resp.Services[0].Methods, want)
+	}
+}
+
+func TestServicesUpsertRoundTripsQuotaConfig(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	ms.credentials["root-ns-id:APIFY_TOKEN_1"] = &store.Credential{ID: "c1", VaultID: "root-ns-id", Key: "APIFY_TOKEN_1", PoolProvider: "apify"}
+	ms.credentials["root-ns-id:APIFY_TOKEN_2"] = &store.Credential{ID: "c2", VaultID: "root-ns-id", Key: "APIFY_TOKEN_2", PoolProvider: "apify"}
+	srv := newTestServer(withStore(ms))
+
+	body := `{"services":[{"name":"apify","host":"api.apify.com","auth":{"type":"bearer","token":"APIFY_TOKEN_1"},"quota":{"daily_cap":5000,"monthly_cap":100000,"rpm":60,"concurrency":4},"rotation":"least_used","account_pool_provider":"apify","accounts":[{"id":"acct1","credential_key":"APIFY_TOKEN_1","daily_cap":5000},{"id":"acct2","credential_key":"APIFY_TOKEN_2","monthly_cap":80000}]}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/vaults/default/services", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/vaults/default/services", nil)
+	getReq.Header.Set("Authorization", "Bearer "+token)
+	getRec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET expected 200, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+
+	var resp struct {
+		Services []struct {
+			Quota struct {
+				DailyCap    int `json:"daily_cap"`
+				MonthlyCap  int `json:"monthly_cap"`
+				RPM         int `json:"rpm"`
+				Concurrency int `json:"concurrency"`
+			} `json:"quota"`
+			Rotation            string `json:"rotation"`
+			AccountPoolProvider string `json:"account_pool_provider"`
+			Accounts            []struct {
+				ID            string `json:"id"`
+				CredentialKey string `json:"credential_key"`
+				DailyCap      int    `json:"daily_cap,omitempty"`
+				MonthlyCap    int    `json:"monthly_cap,omitempty"`
+			} `json:"accounts"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(getRec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode GET response: %v", err)
+	}
+	if len(resp.Services) != 1 {
+		t.Fatalf("expected 1 service, got %d", len(resp.Services))
+	}
+	got := resp.Services[0]
+	if got.Quota.DailyCap != 5000 || got.Quota.MonthlyCap != 100000 || got.Quota.RPM != 60 || got.Quota.Concurrency != 4 {
+		t.Fatalf("quota did not round-trip: %+v", got.Quota)
+	}
+	if got.Rotation != "least_used" {
+		t.Fatalf("rotation = %q, want least_used", got.Rotation)
+	}
+	if got.AccountPoolProvider != "apify" {
+		t.Fatalf("account_pool_provider = %q, want apify", got.AccountPoolProvider)
+	}
+	if len(got.Accounts) != 2 || got.Accounts[1].CredentialKey != "APIFY_TOKEN_2" || got.Accounts[1].MonthlyCap != 80000 {
+		t.Fatalf("accounts did not round-trip: %+v", got.Accounts)
+	}
+	if strings.Contains(getRec.Body.String(), "secret") {
+		t.Fatalf("response leaked credential value: %s", getRec.Body.String())
+	}
+}
+
+func TestServicesQuotaUsageReturnsAccountUsageWithoutCredentialValues(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	ms.credentials["root-ns-id:APIFY_TOKEN_1"] = &store.Credential{
+		ID: "c1", VaultID: "root-ns-id", Key: "APIFY_TOKEN_1", PoolProvider: "apify", Ciphertext: []byte("secret-token-one"),
+	}
+	ms.credentials["root-ns-id:APIFY_TOKEN_2"] = &store.Credential{
+		ID: "c2", VaultID: "root-ns-id", Key: "APIFY_TOKEN_2", PoolProvider: "apify", Ciphertext: []byte("secret-token-two"),
+	}
+	ms.brokerConfigs["root-ns-id"] = &store.BrokerConfig{
+		ID:           "bc-1",
+		VaultID:      "root-ns-id",
+		ServicesJSON: `[{"name":"apify","host":"api.apify.com","auth":{"type":"bearer","token":"APIFY_TOKEN_1"},"quota":{"daily_cap":2,"monthly_cap":10},"account_pool_provider":"apify","accounts":[{"id":"acct1","credential_key":"APIFY_TOKEN_1"},{"id":"acct2","credential_key":"APIFY_TOKEN_2","daily_cap":1}]}]`,
+	}
+	srv := newTestServer(withStore(ms))
+	now := time.Now()
+	srv.egressQuota.Seed([]egressquota.Snapshot{
+		{VaultID: "root-ns-id", MatchedService: "apify", AccountID: "acct1", CredentialKeys: []string{"APIFY_TOKEN_1"}, CreatedAt: now, Status: http.StatusOK},
+		{VaultID: "root-ns-id", MatchedService: "apify", AccountID: "acct2", CredentialKeys: []string{"APIFY_TOKEN_2"}, CreatedAt: now, Status: http.StatusOK},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/vaults/default/services/quota-usage", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "secret-token") {
+		t.Fatalf("response leaked credential value: %s", rec.Body.String())
+	}
+	var resp struct {
+		Services []struct {
+			Name     string `json:"name"`
+			Accounts []struct {
+				ID            string `json:"id"`
+				CredentialKey string `json:"credential_key"`
+				DailyUsed     int    `json:"daily_used"`
+				DailyCap      int    `json:"daily_cap,omitempty"`
+				MonthlyUsed   int    `json:"monthly_used"`
+				MonthlyCap    int    `json:"monthly_cap,omitempty"`
+				State         string `json:"state"`
+			} `json:"accounts"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode quota usage: %v", err)
+	}
+	if len(resp.Services) != 1 || resp.Services[0].Name != "apify" {
+		t.Fatalf("unexpected services response: %+v", resp.Services)
+	}
+	if len(resp.Services[0].Accounts) != 2 {
+		t.Fatalf("expected two accounts, got %+v", resp.Services[0].Accounts)
+	}
+	first, second := resp.Services[0].Accounts[0], resp.Services[0].Accounts[1]
+	if first.ID != "acct1" || first.CredentialKey != "APIFY_TOKEN_1" || first.DailyUsed != 1 || first.DailyCap != 2 || first.MonthlyCap != 10 || first.State != "available" {
+		t.Fatalf("unexpected first account usage: %+v", first)
+	}
+	if second.ID != "acct2" || second.CredentialKey != "APIFY_TOKEN_2" || second.DailyUsed != 1 || second.DailyCap != 1 || second.State != "exhausted" {
+		t.Fatalf("unexpected second account usage: %+v", second)
+	}
+}
+
+func TestServicesQuotaUsageIncludesAccountOnlyServices(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	ms.credentials["root-ns-id:APIFY_TOKEN_1"] = &store.Credential{
+		ID: "c1", VaultID: "root-ns-id", Key: "APIFY_TOKEN_1", PoolProvider: "apify", Ciphertext: []byte("secret-token-one"),
+	}
+	ms.credentials["root-ns-id:APIFY_TOKEN_2"] = &store.Credential{
+		ID: "c2", VaultID: "root-ns-id", Key: "APIFY_TOKEN_2", PoolProvider: "apify", Ciphertext: []byte("secret-token-two"),
+	}
+	ms.brokerConfigs["root-ns-id"] = &store.BrokerConfig{
+		ID: "bc-1", VaultID: "root-ns-id",
+		ServicesJSON: `[{"name":"apify","host":"api.apify.com","auth":{"type":"bearer","token":"APIFY_TOKEN_1"},"account_pool_provider":"apify","accounts":[{"id":"acct1","credential_key":"APIFY_TOKEN_1"},{"id":"acct2","credential_key":"APIFY_TOKEN_2"}]}]`,
+	}
+	srv := newTestServer(withStore(ms))
+	now := time.Now()
+	srv.egressQuota.Seed([]egressquota.Snapshot{
+		{VaultID: "root-ns-id", MatchedService: "apify", AccountID: "acct1", CredentialKeys: []string{"APIFY_TOKEN_1"}, CreatedAt: now, Status: http.StatusOK},
+	})
+	coolingReservation, denial := srv.egressQuota.Reserve(context.Background(), "root-ns-id", broker.Service{
+		Name:                "apify",
+		Auth:                broker.Auth{Type: "bearer", Token: "APIFY_TOKEN_1"},
+		Rotation:            "round_robin",
+		AccountPoolProvider: "apify",
+		Accounts: []broker.ServiceAccount{
+			{ID: "acct1", CredentialKey: "APIFY_TOKEN_1"},
+			{ID: "acct2", CredentialKey: "APIFY_TOKEN_2"},
+		},
+	})
+	if denial != nil {
+		t.Fatalf("reserve cooling account: %+v", denial)
+	}
+	coolingReservation.Cooldown(time.Minute)
+	coolingReservation.Release()
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/vaults/default/services/quota-usage", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "secret-token") {
+		t.Fatalf("response leaked credential value: %s", rec.Body.String())
+	}
+	var resp struct {
+		Services []struct {
+			Name     string `json:"name"`
+			Accounts []struct {
+				ID          string     `json:"id"`
+				DailyUsed   int        `json:"daily_used"`
+				DailyCap    *int       `json:"daily_cap,omitempty"`
+				MonthlyUsed int        `json:"monthly_used"`
+				MonthlyCap  *int       `json:"monthly_cap,omitempty"`
+				State       string     `json:"state"`
+				AvailableAt *time.Time `json:"available_at,omitempty"`
+			} `json:"accounts"`
+		} `json:"services"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode quota usage: %v", err)
+	}
+	if len(resp.Services) != 1 || len(resp.Services[0].Accounts) != 2 {
+		t.Fatalf("unexpected usage response: %+v", resp.Services)
+	}
+	first := resp.Services[0].Accounts[0]
+	if first.ID != "acct1" || first.DailyUsed != 1 || first.MonthlyUsed != 1 || first.DailyCap != nil || first.MonthlyCap != nil || first.State != "cooling" || first.AvailableAt == nil {
+		t.Fatalf("unexpected account-only usage: %+v", first)
+	}
+}
+
+func TestServicesUpsertRejectsUnknownQuotaAccountCredential(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	ms.brokerConfigs["root-ns-id"] = &store.BrokerConfig{
+		ID: "bc-1", VaultID: "root-ns-id",
+		ServicesJSON: `[{"name":"stripe","host":"api.stripe.com","auth":{"type":"bearer","token":"STRIPE_KEY"}}]`,
+	}
+	srv := newTestServer(withStore(ms))
+
+	body := `{"services":[{"name":"apify","host":"api.apify.com","auth":{"type":"bearer","token":"APIFY_TOKEN_1"},"account_pool_provider":"apify","accounts":[{"id":"acct1","credential_key":"MISSING_TOKEN"}]}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/vaults/default/services", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "MISSING_TOKEN") {
+		t.Fatalf("expected missing credential error, got %s", rec.Body.String())
+	}
+	if ms.brokerConfigs["root-ns-id"].ServicesJSON != `[{"name":"stripe","host":"api.stripe.com","auth":{"type":"bearer","token":"STRIPE_KEY"}}]` {
+		t.Fatalf("stored services changed after invalid update: %s", ms.brokerConfigs["root-ns-id"].ServicesJSON)
+	}
+}
+
+func TestCredentialsSetAndListPoolProviderMetadata(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	srv := newTestServer(withStore(ms))
+
+	body := `{"vault":"default","credentials":{"APIFY_TOKEN":"secret"},"metadata":{"APIFY_TOKEN":{"pool_provider":"apify"}}}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/credentials", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/credentials?vault=default", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec = httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp credentialsListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode credentials: %v", err)
+	}
+	if len(resp.Credentials) != 1 || resp.Credentials[0].PoolProvider != "apify" {
+		t.Fatalf("credentials = %+v, want pool_provider apify", resp.Credentials)
+	}
+	if strings.Contains(rec.Body.String(), "secret") {
+		t.Fatalf("credential list leaked secret: %s", rec.Body.String())
+	}
+}
+
+func TestServicesUpsertRejectsAccountPoolWithoutProvider(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	ms.credentials["root-ns-id:APIFY_TOKEN_1"] = &store.Credential{ID: "c1", VaultID: "root-ns-id", Key: "APIFY_TOKEN_1", PoolProvider: "apify"}
+	ms.brokerConfigs["root-ns-id"] = &store.BrokerConfig{
+		ID: "bc-1", VaultID: "root-ns-id",
+		ServicesJSON: `[{"name":"stripe","host":"api.stripe.com","auth":{"type":"bearer","token":"STRIPE_KEY"}}]`,
+	}
+	srv := newTestServer(withStore(ms))
+
+	body := `{"services":[{"name":"apify","host":"api.apify.com","auth":{"type":"bearer","token":"APIFY_TOKEN_1"},"accounts":[{"id":"acct1","credential_key":"APIFY_TOKEN_1"}]}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/vaults/default/services", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "account_pool_provider") {
+		t.Fatalf("expected account_pool_provider error, got %s", rec.Body.String())
+	}
+	if ms.brokerConfigs["root-ns-id"].ServicesJSON != `[{"name":"stripe","host":"api.stripe.com","auth":{"type":"bearer","token":"STRIPE_KEY"}}]` {
+		t.Fatalf("stored services changed after invalid update: %s", ms.brokerConfigs["root-ns-id"].ServicesJSON)
+	}
+}
+
+func TestServicesUpsertRejectsWrongPoolProviderCredential(t *testing.T) {
+	ms, token := setupMockStoreWithSession(t)
+	ms.credentials["root-ns-id:APIFY_TOKEN_1"] = &store.Credential{ID: "c1", VaultID: "root-ns-id", Key: "APIFY_TOKEN_1", PoolProvider: "apify"}
+	ms.brokerConfigs["root-ns-id"] = &store.BrokerConfig{
+		ID: "bc-1", VaultID: "root-ns-id",
+		ServicesJSON: `[{"name":"stripe","host":"api.stripe.com","auth":{"type":"bearer","token":"STRIPE_KEY"}}]`,
+	}
+	srv := newTestServer(withStore(ms))
+
+	body := `{"services":[{"name":"amadeus","host":"api.amadeus.com","auth":{"type":"bearer","token":"APIFY_TOKEN_1"},"account_pool_provider":"amadeus","accounts":[{"id":"acct1","credential_key":"APIFY_TOKEN_1"}]}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/vaults/default/services", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	srv.httpServer.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "not enabled") {
+		t.Fatalf("expected provider mismatch error, got %s", rec.Body.String())
+	}
+	if ms.brokerConfigs["root-ns-id"].ServicesJSON != `[{"name":"stripe","host":"api.stripe.com","auth":{"type":"bearer","token":"STRIPE_KEY"}}]` {
+		t.Fatalf("stored services changed after invalid update: %s", ms.brokerConfigs["root-ns-id"].ServicesJSON)
 	}
 }
 

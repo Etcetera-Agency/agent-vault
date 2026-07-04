@@ -45,6 +45,65 @@ agent-vault vault service set -f stripe-services.yaml --vault my-vault
 
 The `host` tells Agent Vault which requests this service applies to. The `auth` block tells Agent Vault how to authenticate, referencing [credential](/learn/credentials) keys by name (not the actual credential values). The following section covers all five auth types.
 
+## Optional quota and account config
+
+Services may carry quota and account-pool policy. These fields are optional;
+services that omit them behave as unlimited.
+
+```yaml
+services:
+  - name: apify
+    host: api.apify.com
+    auth:
+      type: bearer
+      token: APIFY_TOKEN_1
+    quota:
+      daily_cap: 5000
+      monthly_cap: 100000
+      rpm: 60
+      concurrency: 4
+    rotation: least_used
+    accounts:
+      - id: acct1
+        credential_key: APIFY_TOKEN_1
+        daily_cap: 5000
+      - id: acct2
+        credential_key: APIFY_TOKEN_2
+        monthly_cap: 80000
+```
+
+All quota numbers are non-negative. `daily_cap`, `monthly_cap`, `rpm`, and
+`concurrency` can be set independently; if both daily and monthly caps are set,
+`monthly_cap` must be greater than or equal to `daily_cap`. `rotation` accepts
+`least_used` or `round_robin`.
+
+Account pools reference credential keys only. `credential_key` must name an
+existing vault credential, account `id` values must be unique within the service,
+and Agent Vault never stores or returns credential values in the quota/account
+config.
+
+When a service has a `quota`, Agent Vault enforces only the fields you set. A
+reached `daily_cap` or `monthly_cap`, an exhausted `rpm` window, or a full
+`concurrency` slot returns `429` with `X-Vault-Quota-Exhausted: <service>` and
+`Retry-After`. Counts are reconstructed from request logs on restart. Set a
+provider-side ceiling first when the upstream supports it, then set the Agent
+Vault quota as the local guardrail agents cannot bypass.
+
+When `accounts` are configured, Agent Vault selects a non-exhausted account
+before injecting credentials. `least_used` chooses the account with the lowest
+current window usage; `round_robin` walks the account list and skips exhausted
+or cooling accounts. If a replay-safe request (`GET` or `HEAD`) receives an
+upstream `429`, Agent Vault cools down that account using `Retry-After` and
+retries with another available account. When every account is exhausted or
+cooling, Agent Vault emits one SMTP operator alert per service per day when SMTP
+notifications are configured.
+
+Vault admins can manage the same quota fields in the **Services** tab. The
+editor accepts blank quota fields as unset, uses credential key selectors for
+account pools, and never displays credential values. The service table shows
+daily/monthly usage against configured caps plus each account's available,
+exhausted, or cooling state.
+
 ## Auth types
 
 Every service must include an `auth` config that tells Agent Vault how to authenticate to the target host. The `auth` config references [credential](/learn/credentials) key names (not the actual credential values) stored in the vault.

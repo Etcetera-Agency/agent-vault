@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/Infisical/agent-vault/internal/broker"
 	"github.com/Infisical/agent-vault/internal/catalog"
 	"github.com/Infisical/agent-vault/internal/proposal"
+	"github.com/Infisical/agent-vault/internal/store"
 )
 
 // rejectDeprecatedDescription returns the index of the first services
@@ -253,29 +255,77 @@ type candidateRef struct {
 }
 
 type serviceResponse struct {
-	Name          string                  `json:"name"`
-	Host          string                  `json:"host"`
-	Enabled       *bool                   `json:"enabled,omitempty"`
-	Auth          broker.Auth             `json:"auth"`
-	Substitutions []broker.Substitution   `json:"substitutions,omitempty"`
-	Methods       []string                `json:"methods"`
-	MailProxy     *broker.MailProxyPolicy `json:"mail_proxy,omitempty"`
+	Name                string                  `json:"name"`
+	Host                string                  `json:"host"`
+	Enabled             *bool                   `json:"enabled,omitempty"`
+	Auth                broker.Auth             `json:"auth"`
+	Substitutions       []broker.Substitution   `json:"substitutions,omitempty"`
+	Methods             []string                `json:"methods"`
+	MailProxy           *broker.MailProxyPolicy `json:"mail_proxy,omitempty"`
+	Quota               *broker.ServiceQuota    `json:"quota,omitempty"`
+	Accounts            []broker.ServiceAccount `json:"accounts,omitempty"`
+	Rotation            string                  `json:"rotation,omitempty"`
+	AccountPoolProvider string                  `json:"account_pool_provider,omitempty"`
 }
 
 func serviceResponses(services []broker.Service) []serviceResponse {
 	out := make([]serviceResponse, len(services))
 	for i, svc := range services {
 		out[i] = serviceResponse{
-			Name:          svc.Name,
-			Host:          svc.MatcherPattern(),
-			Enabled:       svc.Enabled,
-			Auth:          svc.Auth,
-			Substitutions: svc.Substitutions,
-			Methods:       broker.DisplayMethods(svc.Methods),
-			MailProxy:     svc.MailProxy,
+			Name:                svc.Name,
+			Host:                svc.MatcherPattern(),
+			Enabled:             svc.Enabled,
+			Auth:                svc.Auth,
+			Substitutions:       svc.Substitutions,
+			Methods:             broker.DisplayMethods(svc.Methods),
+			MailProxy:           svc.MailProxy,
+			Quota:               svc.Quota,
+			Accounts:            svc.Accounts,
+			Rotation:            svc.Rotation,
+			AccountPoolProvider: svc.AccountPoolProvider,
 		}
 	}
 	return out
+}
+
+func (s *Server) validateServiceAccountCredentialRefs(ctx context.Context, vaultID string, services []broker.Service) error {
+	hasAccounts := false
+	for _, svc := range services {
+		if len(svc.Accounts) > 0 {
+			hasAccounts = true
+			break
+		}
+	}
+	if !hasAccounts {
+		return nil
+	}
+
+	creds, err := s.store.ListCredentials(ctx, vaultID)
+	if err != nil {
+		return fmt.Errorf("load credential keys: %w", err)
+	}
+	existing := make(map[string]store.Credential, len(creds))
+	for _, cred := range creds {
+		existing[cred.Key] = cred
+	}
+	for i, svc := range services {
+		if len(svc.Accounts) == 0 {
+			continue
+		}
+		if svc.AccountPoolProvider == "" {
+			return fmt.Errorf("service %d: account_pool_provider is required when accounts are set", i)
+		}
+		for j, acct := range svc.Accounts {
+			cred, ok := existing[acct.CredentialKey]
+			if !ok {
+				return fmt.Errorf("service %d account %d: credential_key %q does not exist", i, j, acct.CredentialKey)
+			}
+			if cred.PoolProvider != svc.AccountPoolProvider {
+				return fmt.Errorf("service %d account %d: credential_key %q is not enabled for account_pool_provider %q", i, j, acct.CredentialKey, svc.AccountPoolProvider)
+			}
+		}
+	}
+	return nil
 }
 
 func toCandidateRefs(svcs []broker.Service) []candidateRef {
@@ -362,6 +412,98 @@ func (s *Server) handleServicesCredentialUsage(w http.ResponseWriter, r *http.Re
 	jsonOK(w, map[string]interface{}{"services": refs})
 }
 
+func (s *Server) handleServicesQuotaUsage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	name := r.PathValue("name")
+
+	ns, err := s.store.GetVault(ctx, name)
+	if err != nil || ns == nil {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("Vault %q not found", name))
+		return
+	}
+
+	if _, err := s.requireVaultAccess(w, r, ns.ID); err != nil {
+		return
+	}
+
+	services, err := s.loadServices(ctx, ns.ID)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "Failed to parse services")
+		return
+	}
+
+	type accountUsage struct {
+		ID            string     `json:"id"`
+		CredentialKey string     `json:"credential_key"`
+		DailyUsed     int        `json:"daily_used"`
+		DailyCap      *int       `json:"daily_cap,omitempty"`
+		MonthlyUsed   int        `json:"monthly_used"`
+		MonthlyCap    *int       `json:"monthly_cap,omitempty"`
+		State         string     `json:"state"`
+		AvailableAt   *time.Time `json:"available_at,omitempty"`
+	}
+	type serviceUsage struct {
+		Name     string         `json:"name"`
+		Accounts []accountUsage `json:"accounts"`
+	}
+	out := []serviceUsage{}
+	now := time.Now()
+	for _, svc := range services {
+		if svc.Quota == nil && len(svc.Accounts) == 0 {
+			continue
+		}
+		// AICODE-NOTE: Quota usage is a read-only UI surface; return credential keys and counters only, never decrypted credential values.
+		accounts := svc.Accounts
+		if len(accounts) == 0 {
+			keys := svc.Auth.CredentialKeys()
+			key := ""
+			if len(keys) > 0 {
+				key = keys[0]
+			}
+			accounts = []broker.ServiceAccount{{ID: "default", CredentialKey: key}}
+		}
+		entry := serviceUsage{Name: svc.Name}
+		for _, acct := range accounts {
+			var dailyCap, monthlyCap *int
+			if svc.Quota != nil {
+				dailyCap = svc.Quota.DailyCap
+				monthlyCap = svc.Quota.MonthlyCap
+			}
+			if acct.DailyCap != nil {
+				dailyCap = acct.DailyCap
+			}
+			if acct.MonthlyCap != nil {
+				monthlyCap = acct.MonthlyCap
+			}
+			accountID := acct.ID
+			if accountID == "" {
+				accountID = acct.CredentialKey
+			}
+			day, month, coolingUntil := s.egressQuota.Usage(ns.ID, svc.Name, accountID)
+			state := "available"
+			var availableAt *time.Time
+			if coolingUntil.After(now) {
+				state = "cooling"
+				availableAt = &coolingUntil
+			} else if (dailyCap != nil && day >= *dailyCap) || (monthlyCap != nil && month >= *monthlyCap) {
+				state = "exhausted"
+			}
+			entry.Accounts = append(entry.Accounts, accountUsage{
+				ID:            acct.ID,
+				CredentialKey: acct.CredentialKey,
+				DailyUsed:     day,
+				DailyCap:      dailyCap,
+				MonthlyUsed:   month,
+				MonthlyCap:    monthlyCap,
+				State:         state,
+				AvailableAt:   availableAt,
+			})
+		}
+		out = append(out, entry)
+	}
+	jsonOK(w, map[string]interface{}{"services": out})
+}
+
 func (s *Server) handleServicesUpsert(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	name := r.PathValue("name")
@@ -427,6 +569,10 @@ func (s *Server) handleServicesUpsert(w http.ResponseWriter, r *http.Request) {
 
 	incoming := broker.Config{Vault: name, Services: incomingSlice}
 	if err := broker.Validate(&incoming); err != nil {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("Invalid services: %v", err))
+		return
+	}
+	if err := s.validateServiceAccountCredentialRefs(ctx, ns.ID, incomingSlice); err != nil {
 		jsonError(w, http.StatusBadRequest, fmt.Sprintf("Invalid services: %v", err))
 		return
 	}
@@ -665,6 +811,10 @@ func (s *Server) handleServicesSet(w http.ResponseWriter, r *http.Request) {
 	services = splitInlineHosts(services)
 	cfg := broker.Config{Vault: name, Services: services}
 	if err := broker.Validate(&cfg); err != nil {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("Invalid services: %v", err))
+		return
+	}
+	if err := s.validateServiceAccountCredentialRefs(ctx, ns.ID, services); err != nil {
 		jsonError(w, http.StatusBadRequest, fmt.Sprintf("Invalid services: %v", err))
 		return
 	}

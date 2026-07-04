@@ -70,3 +70,128 @@ Completed:
 
 Pending:
 - None for `fix-mail-proxy-review-gaps`; change archived on 2026-07-01.
+
+add-service-quota-config coverage
+
+Completed:
+- Service schema carries optional `quota`, `accounts`, and `rotation` fields.
+- Service POST/PUT round-trips full and partial quota/account config without dropping existing service fields.
+- Validation rejects negative quota values, `monthly_cap < daily_cap`, duplicate account ids, invalid rotation, and account `credential_key` refs missing from the vault.
+- GET service responses return credential keys only and never credential values for account pools.
+- Docs describe optional quota/account config and note enforcement arrives in later slices.
+
+Pending:
+- Runtime quota enforcement remains in `enforce-egress-quota`.
+- Multi-account rotation and upstream failover remain in `add-credential-rotation`.
+- UI editing and usage display remain in `add-quota-ui`.
+
+enforce-egress-quota coverage
+
+Completed:
+- `internal/egressquota.Registry` enforces per-service implicit-account daily/monthly caps, rpm, and concurrency.
+- Counters seed from request logs at server startup and reconcile periodically.
+- MITM credential injection denies before secret lookup/injection when quota is exhausted.
+- Quota denial returns HTTP 429 with `X-Vault-Quota-Exhausted` and `Retry-After`.
+- Forwarded upstream responses increment day/month counters and release concurrency slots.
+- Docs describe provider-side ceilings plus Agent Vault quota guardrails.
+
+Pending:
+- Multi-account rotation, cooldown, upstream 429 failover, and exhaustion alerts remain in `add-credential-rotation`.
+- UI editing and usage display remain in `add-quota-ui`.
+
+add-credential-rotation coverage
+
+Completed:
+- Account pools select non-exhausted accounts using `least_used` or `round_robin`.
+- Account-specific counters, rpm, cooldown, and per-account cap overrides participate in selection.
+- Selected account credential keys replace the primary auth key before injection and are logged first for restart seeding.
+- Replay-safe upstream 429 responses cool down the account and retry with the next available account.
+- Full-pool exhaustion returns 429 and emits one SMTP operator alert per service/day when SMTP is configured.
+- Tests cover least-used, round-robin, cooldown skip, upstream 429 failover, full-pool exhaustion, and alert dedup.
+
+Pending:
+- UI editing and usage display remain in `add-quota-ui`.
+
+fix-quota-account-identity coverage
+
+Completed:
+- Request logs carry non-secret `account_id` metadata for matched account-pool traffic.
+- Request-log store, list, migration, and migration-copy paths persist `account_id`.
+- Egress quota counters, cooldowns, rate/concurrency state, round-robin cursor decisions, and usage snapshots key account pools by `accounts[].id`.
+- Reservations expose separate account id and credential key; broker injection uses credential key while logs/usage receive account id.
+- Usage API returns rows keyed by account id and never credential values.
+- Tests cover `id != credential_key` for least-used, round-robin, cooldown, request-log seeding, usage response, and injection metadata.
+- Docs explain account id vs credential key semantics.
+
+Pending:
+- None for `fix-quota-account-identity`; ready to archive.
+
+add-credential-pool-eligibility coverage
+
+Completed:
+- Credentials store non-secret `pool_provider` metadata with migration and SQL read/update support.
+- Credential API lists `pool_provider` and supports metadata-only updates without decrypting or rewriting credential values.
+- Service config and responses carry `account_pool_provider`.
+- Account-pool service saves require `account_pool_provider` and matching credential `pool_provider`.
+- Credentials without `pool_provider` remain unpoolable by default, including OAuth/mail-proxy-style credentials.
+- Credentials UI shows pool state and lets admins set or clear pool provider metadata.
+- Services UI requires a provider for account pools, filters account credential choices, and blocks mismatches.
+- TypeScript SDK types expose credential pool metadata and service account-pool provider fields.
+- Docs describe explicit credential pool opt-in.
+
+Pending:
+- None for `add-credential-pool-eligibility`; ready to archive.
+
+add-account-only-rotation coverage
+
+Completed:
+- Quota registry now runs for services with `accounts` even when `quota` is absent.
+- Account-only services rotate credentials and honor cooldown while applying no numeric caps unless configured.
+- Broker injection handles no-op reservations for services with no quota and no accounts.
+- Account-only reservations record selected account usage for usage snapshots.
+- Quota usage API includes account-only services and omits caps when no quota cap is configured.
+- Existing pool-eligibility validation rejects account-only unpoolable or wrong-provider credentials.
+- Tests cover account-only round-robin, cooldown skip, passthrough parity, injection, and usage output.
+- Docs describe account-only rotation semantics.
+
+Pending:
+- None for `add-account-only-rotation`; ready to archive.
+
+fix-quota-ui-account-usage coverage
+
+Completed:
+- Usage API includes services with quota or account-pool config.
+- Account-only usage rows include account id, credential key reference, daily/monthly usage, state, and `available_at` while cooling.
+- Account-only rows omit daily/monthly caps when no caps are configured.
+- API response tests assert no credential values leak.
+- Services table already renders usage account rows when returned, so account-only services no longer fall back to generic `Configured`.
+- Editor continues allowing blank quota with accounts through account-only rotation support.
+
+Pending:
+- None for `fix-quota-ui-account-usage`; ready to archive.
+
+fix-quota-failover-replay coverage
+
+Completed:
+- Account-pool MITM requests now materialize request bodies so upstream 429 failover can rebuild fresh outbound attempts.
+- Failover retries preserve method, URL, headers, and body while applying the next account's injection.
+- Failed reservations are cooled down and released before selecting the next account; only the final returned attempt is committed.
+- Retry attempts stop when no next account is available and remain bounded by a hard maximum.
+- Tests cover GET failover metadata, POST body replay, PUT body replay, exhausted account failover, and oversized account-pool request rejection.
+- Docs describe replay behavior and final-attempt quota accounting.
+
+Pending:
+- None for `fix-quota-failover-replay`; ready to archive.
+
+add-quota-ui coverage
+
+Completed:
+- Services UI preserves and edits optional `quota`, `accounts`, and `rotation` fields.
+- `QuotaEditor` supports daily/monthly/rpm/concurrency caps with blank values omitted.
+- `AccountPoolEditor` adds/removes account rows using credential keys only and supports per-account overrides.
+- Service table displays per-account daily/monthly usage and available/exhausted/cooling state.
+- `GET /v1/vaults/{name}/services/quota-usage` returns usage/caps/state without credential values.
+- Docs describe managing ceilings and reading usage in the Services tab.
+
+Pending:
+- None for `add-quota-ui`; change archived on 2026-07-01.

@@ -1,0 +1,13 @@
+# Completion Review: enforce-egress-quota
+
+## Fixed During Implementation
+
+- Added `internal/egressquota` registry with daily/monthly counters, rpm, concurrency, request-log startup seed, and periodic reconcile.
+- Wired `StoreCredentialProvider` to deny before credential lookup/injection when quota is exhausted.
+- Wired MITM responses to return `429`, `X-Vault-Quota-Exhausted`, and `Retry-After`, while releasing concurrency slots and recording forwarded calls.
+- Code Simplifier fix: reordered reserve checks so concurrency denial does not consume an rpm token.
+
+## Verification
+
+- `openspec validate enforce-egress-quota --strict`
+- `go test ./internal/egressquota ./internal/brokercore ./internal/mitm ./internal/server ./cmd`

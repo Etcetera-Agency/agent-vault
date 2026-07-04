@@ -43,8 +43,6 @@ func utcTimePtr(t *time.Time) *time.Time {
 	return &u
 }
 
-
-
 // nullableString returns nil for empty strings, enabling SQL NULL inserts.
 func nullableString(s string) interface{} {
 	if s == "" {
@@ -707,6 +705,10 @@ func (s *SQLStore) SetCredential(ctx context.Context, vaultID, key string, ciphe
 		return nil, fmt.Errorf("setting credential: %w", err)
 	}
 
+	cred, err := s.GetCredential(ctx, vaultID, key)
+	if err == nil {
+		return cred, nil
+	}
 	return &Credential{
 		ID: id, VaultID: vaultID, Key: key, Type: "static",
 		Ciphertext: ciphertext, Nonce: nonce,
@@ -716,7 +718,7 @@ func (s *SQLStore) SetCredential(ctx context.Context, vaultID, key string, ciphe
 
 func (s *SQLStore) GetCredential(ctx context.Context, vaultID, key string) (*Credential, error) {
 	row := s.db.QueryRowContext(ctx,
-		s.dialect.Rebind("SELECT id, vault_id, key, type, ciphertext, nonce, created_at, updated_at FROM credentials WHERE vault_id = ? AND key = ?"),
+		s.dialect.Rebind("SELECT id, vault_id, key, type, pool_provider, ciphertext, nonce, created_at, updated_at FROM credentials WHERE vault_id = ? AND key = ?"),
 		vaultID, key,
 	)
 	return s.scanCredential(row)
@@ -724,7 +726,7 @@ func (s *SQLStore) GetCredential(ctx context.Context, vaultID, key string) (*Cre
 
 func (s *SQLStore) ListCredentials(ctx context.Context, vaultID string) ([]Credential, error) {
 	rows, err := s.db.QueryContext(ctx,
-		s.dialect.Rebind("SELECT id, vault_id, key, type, ciphertext, nonce, created_at, updated_at FROM credentials WHERE vault_id = ? ORDER BY key"),
+		s.dialect.Rebind("SELECT id, vault_id, key, type, pool_provider, ciphertext, nonce, created_at, updated_at FROM credentials WHERE vault_id = ? ORDER BY key"),
 		vaultID,
 	)
 	if err != nil {
@@ -736,14 +738,31 @@ func (s *SQLStore) ListCredentials(ctx context.Context, vaultID string) ([]Crede
 	for rows.Next() {
 		var cred Credential
 		var createdAt, updatedAt interface{}
-		if err := rows.Scan(&cred.ID, &cred.VaultID, &cred.Key, &cred.Type, &cred.Ciphertext, &cred.Nonce, &createdAt, &updatedAt); err != nil {
+		var poolProvider sql.NullString
+		if err := rows.Scan(&cred.ID, &cred.VaultID, &cred.Key, &cred.Type, &poolProvider, &cred.Ciphertext, &cred.Nonce, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scanning credential: %w", err)
 		}
+		cred.PoolProvider = poolProvider.String
 		cred.CreatedAt, _ = s.dialect.ScanTime(createdAt)
 		cred.UpdatedAt, _ = s.dialect.ScanTime(updatedAt)
 		creds = append(creds, cred)
 	}
 	return creds, rows.Err()
+}
+
+func (s *SQLStore) UpdateCredentialPoolProvider(ctx context.Context, vaultID, key, poolProvider string) error {
+	res, err := s.db.ExecContext(ctx,
+		s.dialect.Rebind("UPDATE credentials SET pool_provider = ?, updated_at = ? WHERE vault_id = ? AND key = ?"),
+		nullableString(poolProvider), s.now(), vaultID, key,
+	)
+	if err != nil {
+		return fmt.Errorf("updating credential pool provider: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *SQLStore) DeleteCredential(ctx context.Context, vaultID, key string) error {
@@ -2179,9 +2198,11 @@ func (s *SQLStore) scanVault(row *sql.Row) (*Vault, error) {
 func (s *SQLStore) scanCredential(row *sql.Row) (*Credential, error) {
 	var cred Credential
 	var createdAt, updatedAt interface{}
-	if err := row.Scan(&cred.ID, &cred.VaultID, &cred.Key, &cred.Type, &cred.Ciphertext, &cred.Nonce, &createdAt, &updatedAt); err != nil {
+	var poolProvider sql.NullString
+	if err := row.Scan(&cred.ID, &cred.VaultID, &cred.Key, &cred.Type, &poolProvider, &cred.Ciphertext, &cred.Nonce, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
+	cred.PoolProvider = poolProvider.String
 	cred.CreatedAt, _ = s.dialect.ScanTime(createdAt)
 	cred.UpdatedAt, _ = s.dialect.ScanTime(updatedAt)
 	return &cred, nil
@@ -3234,9 +3255,9 @@ func (s *SQLStore) InsertRequestLogs(ctx context.Context, rows []RequestLog) err
 	stmt, err := tx.PrepareContext(ctx, s.dialect.Rebind(`
 		INSERT INTO request_logs
 		  (vault_id, actor_type, actor_id, ingress, method, host, path,
-		   matched_service, credential_keys, status, latency_ms, error_code,
+		   matched_service, account_id, credential_keys, status, latency_ms, error_code,
 		   auth_scheme, auth_header, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`))
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`))
 	if err != nil {
 		return fmt.Errorf("preparing request_logs insert: %w", err)
 	}
@@ -3257,7 +3278,7 @@ func (s *SQLStore) InsertRequestLogs(ctx context.Context, rows []RequestLog) err
 		}
 		if _, err := stmt.ExecContext(ctx,
 			r.VaultID, r.ActorType, r.ActorID, r.Ingress, r.Method, r.Host, r.Path,
-			r.MatchedService, string(keysJSON), r.Status, r.LatencyMs, r.ErrorCode,
+			r.MatchedService, r.AccountID, string(keysJSON), r.Status, r.LatencyMs, r.ErrorCode,
 			r.AuthScheme, r.AuthHeader,
 			s.dialect.FormatTime(createdAt.UTC()),
 		); err != nil {
@@ -3317,7 +3338,7 @@ func (s *SQLStore) ListRequestLogs(ctx context.Context, opts ListRequestLogsOpts
 	}
 
 	query := `SELECT id, vault_id, actor_type, actor_id, ingress, method, host, path,
-	                 matched_service, credential_keys, status, latency_ms, error_code, created_at
+	                 matched_service, account_id, credential_keys, status, latency_ms, error_code, created_at
 	          FROM request_logs`
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ") // #nosec G202 -- where entries are static predicate strings; all user input flows through args as ? placeholders
@@ -3346,7 +3367,7 @@ func (s *SQLStore) ListRequestLogs(ctx context.Context, opts ListRequestLogsOpts
 		var createdAt interface{}
 		if err := rows.Scan(
 			&rl.ID, &rl.VaultID, &rl.ActorType, &rl.ActorID, &rl.Ingress,
-			&rl.Method, &rl.Host, &rl.Path, &rl.MatchedService, &keysJSON,
+			&rl.Method, &rl.Host, &rl.Path, &rl.MatchedService, &rl.AccountID, &keysJSON,
 			&rl.Status, &rl.LatencyMs, &rl.ErrorCode, &createdAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning request_log: %w", err)

@@ -36,14 +36,15 @@ type VaultGrant struct {
 // Ciphertext and Nonce are opaque bytes, encryption is handled
 // by the caller, not the store.
 type Credential struct {
-	ID         string
-	VaultID    string
-	Key        string
-	Type       string // "static" (default) or "oauth"
-	Ciphertext []byte
-	Nonce      []byte
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	ID           string
+	VaultID      string
+	Key          string
+	Type         string // "static" (default) or "oauth"
+	PoolProvider string
+	Ciphertext   []byte
+	Nonce        []byte
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // CredentialOAuth stores the OAuth configuration and refresh state for
@@ -316,6 +317,7 @@ type RequestLog struct {
 	Host           string
 	Path           string
 	MatchedService string
+	AccountID      string
 	CredentialKeys []string
 	Status         int
 	LatencyMs      int64
@@ -436,6 +438,7 @@ type Store interface {
 	SetCredential(ctx context.Context, vaultID, key string, ciphertext, nonce []byte) (*Credential, error)
 	GetCredential(ctx context.Context, vaultID, key string) (*Credential, error)
 	ListCredentials(ctx context.Context, vaultID string) ([]Credential, error)
+	UpdateCredentialPoolProvider(ctx context.Context, vaultID, key, poolProvider string) error
 	DeleteCredential(ctx context.Context, vaultID, key string) error
 
 	// OAuth credentials

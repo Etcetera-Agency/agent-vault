@@ -76,6 +76,21 @@ export interface Substitution {
   in?: SubstitutionSurface[];
 }
 
+export interface ServiceQuota {
+  daily_cap?: number;
+  monthly_cap?: number;
+  rpm?: number;
+  concurrency?: number;
+}
+
+export interface ServiceAccount {
+  id: string;
+  credential_key: string;
+  daily_cap?: number;
+  monthly_cap?: number;
+  rpm?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Service type
 // ---------------------------------------------------------------------------
@@ -107,6 +122,14 @@ export interface ServiceInput {
   auth: ServiceAuth;
   /** Optional placeholder→credential substitutions applied before forwarding. */
   substitutions?: Substitution[];
+  /** Optional quota caps. */
+  quota?: ServiceQuota;
+  /** Optional account pool. Requires account_pool_provider when non-empty. */
+  accounts?: ServiceAccount[];
+  /** Account-pool rotation policy. */
+  rotation?: "least_used" | "round_robin";
+  /** Provider id required for account-pool credential eligibility. */
+  account_pool_provider?: string;
 }
 
 /**
@@ -131,6 +154,10 @@ export interface Service {
   auth: ServiceAuth;
   /** Optional placeholder→credential substitutions applied before forwarding. */
   substitutions?: Substitution[];
+  quota?: ServiceQuota;
+  accounts?: ServiceAccount[];
+  rotation?: "least_used" | "round_robin";
+  account_pool_provider?: string;
 }
 
 // ---------------------------------------------------------------------------
