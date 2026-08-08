@@ -96,6 +96,8 @@ interface CatalogTemplate {
   suggested_credential_key: string;
   header?: string;
   prefix?: string;
+  headers?: Record<string, string>;
+  substitutions?: Substitution[];
 }
 
 interface CredentialInfo {
@@ -767,6 +769,7 @@ function ServiceModal({
     setAccounts([]);
     setCustomHeaders([{ _id: nextRowId(), name: "", value: "" }]);
     setSubs([]);
+    setSubsExpanded(false);
   }
 
   function applyPreset(id: string) {
@@ -785,6 +788,20 @@ function ServiceModal({
       setApiKey(tpl.suggested_credential_key);
       setApiKeyHeader(tpl.header ?? "");
       setApiKeyPrefix(tpl.prefix ?? "");
+    }
+    if (tpl.auth_type === "custom" && tpl.headers) {
+      setCustomHeaders(Object.entries(tpl.headers).map(([name, value]) => ({ _id: nextRowId(), name, value })));
+    }
+    if (tpl.substitutions && tpl.substitutions.length > 0) {
+      setSubs(
+        tpl.substitutions.map((s) => ({
+          _id: nextRowId(),
+          key: s.key,
+          placeholder: s.placeholder,
+          in: s.in && s.in.length > 0 ? [...s.in] : [...DEFAULT_SUBSTITUTION_SURFACES],
+        }))
+      );
+      setSubsExpanded(true);
     }
   }
 
